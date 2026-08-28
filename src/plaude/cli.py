@@ -147,6 +147,53 @@ def delete(ctx, session, yes):
         sys.exit(1)
 
 
+@main.command("bind")
+@click.option("--historical-user-id", default=None,
+              help="Historical user id the device is locked to (recovery rebind). "
+                   "Defaults to the configured device token.")
+@click.option("--save", "save_creds", is_flag=True,
+              help="Write the new credentials to the configured creds path.")
+@click.pass_context
+def bind(ctx, historical_user_id, save_creds):
+    """Re-key the device to a fresh RSA keypair (self-bind).
+
+    Runs the PLAUD offline-rebind recipe: recovery connect with the
+    historical user id pinned + force-clear, depair, then reconnect so the
+    device stores a newly generated RSA public key. Future recordings will
+    be encrypted to it and become decryptable.
+    """
+    cfg = load_config()
+    address = cfg["device"]["address"]
+    token = cfg["device"]["token"]
+    creds_path = cfg["device"].get("creds_path", "~/plaud-credentials.md")
+    verbose = ctx.obj["verbose"]
+
+    async def _bind():
+        from .ble.bind import recovery_rebind, write_creds_file
+        result = await recovery_rebind(
+            address, token, creds_path,
+            historical_user_id=historical_user_id,
+            verbose=verbose,
+        )
+        click.echo("Device re-bound successfully.")
+        if save_creds:
+            write_creds_file(result["creds"], creds_path)
+            click.echo(f"New credentials written to {creds_path}")
+        else:
+            click.echo("New credentials (save with --save):")
+            click.echo(f"  creds_path: {result['creds_path']}")
+        return result
+
+    try:
+        asyncio.run(_bind())
+    except KeyboardInterrupt:
+        click.echo("\nInterrupted.")
+        sys.exit(130)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 @main.command()
 @click.option("--timeout", "-t", default=15.0, help="Scan timeout in seconds")
 def scan(timeout):
