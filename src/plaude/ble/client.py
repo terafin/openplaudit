@@ -207,6 +207,21 @@ class PlaudClient:
         key = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
         return key.decrypt(secret, padding.PKCS1v15())
 
+    async def depair(self, clear_files: bool = False) -> bytes | None:
+        """Unbind the device from the current binding key.
+
+        cmd 5 (APP_DEPAIR_REQ) with payload [clear_files:1]. Sends the depair
+        request and waits for the depair confirmation (cmd 5 response). After
+        this, the device is unbound and will accept a new binding key on the
+        next pre-handshake.
+
+        Returns the raw depair response frame, or None on timeout.
+        """
+        payload = bytes([1 if clear_files else 0])
+        await self.send(CMD_RECORD_SWITCH, payload)
+        resp = await self.wait_response(CMD_RECORD_SWITCH, timeout=6.0)
+        return resp
+
     async def _perform_pre_handshake(self, creds: dict) -> Crypto:
         """Run the RSA pre-handshake and return session Crypto.
 
@@ -276,9 +291,14 @@ class PlaudClient:
 
         return Crypto(key, nonce, ad)
 
-    async def handshake(self) -> bool:
-        """Authenticate with the device (v20 pre-handshake + main + two-handshake)."""
-        creds = load_credentials(self.creds_path)
+    async def handshake(self, creds: dict | None = None) -> bool:
+        """Authenticate with the device (v20 pre-handshake + main + two-handshake).
+
+        `creds` may override the credential file loaded from `self.creds_path`
+        (used by the self-bind flow to present a freshly generated keypair).
+        """
+        if creds is None:
+            creds = load_credentials(self.creds_path)
         self.crypto = await self._perform_pre_handshake(creds)
 
         if self.verbose:
