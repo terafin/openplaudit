@@ -8,7 +8,15 @@ def load_model(model_name: str = "medium"):
     Whisper is imported lazily so the module stays importable (and patchable)
     without the heavy torch/whisper stack being present.
     """
-    import whisper
+    try:
+        import whisper
+    except ImportError:
+        raise ImportError(
+            "openai-whisper is not installed in this environment. "
+            "This build has the ML/transcription stack removed (see "
+            "~/openplaudit-no-whisper.patch). Sync downloads and decodes audio "
+            "but skips transcription."
+        ) from None
     return whisper.load_model(model_name)
 
 

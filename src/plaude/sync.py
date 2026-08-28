@@ -55,12 +55,14 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
     if not address or not token:
         raise ValueError("Device address and token must be configured. Run: plaude config init")
 
+    creds_path = cfg["device"].get("creds_path", "~/plaud-credentials.md")
+
     dirs = get_output_dirs(cfg)
     for d in dirs.values():
         d.mkdir(parents=True, exist_ok=True)
 
     state = load_state()
-    client = PlaudClient(address, token, verbose=verbose)
+    client = PlaudClient(address, token, verbose=verbose, creds_path=creds_path)
     completed_count = 0
     whisper_model = None
 
@@ -69,8 +71,7 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
             print("Connecting to PLAUD device...")
         await client.connect()
 
-        if not await client.handshake():
-            raise ConnectionError("Handshake failed — check token or ensure device is not recording")
+        await client.handshake()
         await client.time_sync()
 
         sessions = await client.get_sessions()
@@ -103,7 +104,11 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                     if not quiet:
                         print(f"\nDownloading {display_time} ({s['file_size'] / 1024:.1f} KB)...")
 
-                    raw_data = await download_file(client, sid, s["file_size"], verbose=verbose)
+                    raw_data = await download_file(client, sid, s["file_size"],
+                                                   file_index=s.get("file_index"),
+                                                   file_type=s.get("file_type", 0),
+                                                   verbose=verbose,
+                                                   progress_path=str(raw_path) if raw_path else None)
 
                     if raw_path:
                         raw_path.write_bytes(raw_data)
@@ -121,7 +126,10 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                         # Raw data lost and no WAV — re-download
                         if not quiet:
                             print(f"\nRe-downloading {display_time} (raw data not retained)...")
-                        raw_data = await download_file(client, sid, s["file_size"], verbose=verbose)
+                        raw_data = await download_file(client, sid, s["file_size"],
+                                                   file_index=s.get("file_index"),
+                                                   file_type=s.get("file_type", 0),
+                                                   verbose=verbose)
                         mark_downloaded(state, sid)
                         save_state(state)
 
@@ -141,22 +149,40 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                 else:
                     raise RuntimeError(f"WAV file not produced: {wav_path}")
 
-                # Phase 3: Transcribe
-                if not quiet:
-                    print(f"  Transcribing with Whisper ({cfg['transcription']['model']})...")
+                # Phase 3: Transcribe (disabled — whisper/ML stack not installed).
+                # Write a deterministic no-op transcript and still mark the session
+                # transcribed so idempotent dedupe keeps working and sessions are
+                # not re-downloaded. To restore Whisper transcription, install
+                # openai-whisper and remove the _whisper_disabled shortcut below.
+                from .audio.decoder import get_wav_duration
+                _whisper_disabled = True
 
-                if whisper_model is None:
-                    from .transcription.whisper import load_model
-                    whisper_model = load_model(cfg["transcription"]["model"])
+                if _whisper_disabled:
+                    duration = get_wav_duration(str(wav_path)) or 0.0
+                    result = {
+                        "file": fname,
+                        "duration_seconds": round(duration, 1),
+                        "model": "disabled",
+                        "language": "unknown",
+                        "segments": [],
+                        "text": "",
+                        "note": "Transcription disabled (openai-whisper not installed). See ~/openplaudit-no-whisper.patch.",
+                    }
+                    if not quiet:
+                        print(f"  Transcription disabled (no whisper stack) — {wav_path.name} ({duration:.1f}s)")
+                else:
+                    if whisper_model is None:
+                        from .transcription.whisper import load_model
+                        whisper_model = load_model(cfg["transcription"]["model"])
 
-                from .transcription.whisper import transcribe_with_model
-                result = transcribe_with_model(
-                    whisper_model,
-                    str(wav_path),
-                    model_name=cfg["transcription"]["model"],
-                    language=cfg["transcription"]["language"] or None,
-                )
-                result["file"] = fname
+                    from .transcription.whisper import transcribe_with_model
+                    result = transcribe_with_model(
+                        whisper_model,
+                        str(wav_path),
+                        model_name=cfg["transcription"]["model"],
+                        language=cfg["transcription"]["language"] or None,
+                    )
+                    result["file"] = fname
 
                 transcript_path = dirs["transcripts"] / f"{fname}.json"
                 transcript_path.write_text(json.dumps(result, indent=2, ensure_ascii=False))

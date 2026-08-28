@@ -16,6 +16,8 @@ DEFAULTS = {
     "device": {
         "address": "",
         "token": "",
+        "creds_path": "~/plaud-credentials.md",
+        "port_version": 20,
     },
     "output": {
         "base_dir": DEFAULT_OUTPUT_DIR,

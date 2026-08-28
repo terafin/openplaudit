@@ -12,7 +12,6 @@ authors = [{name = "Ram Sundaram", email = "ram@terrapay.com"}]
 dependencies = [
     "bleak>=0.22",
     "opuslib>=3.0",
-    "openai-whisper>=20231117",
     "click>=8.0",
     "tomli-w>=1.0",
 ]

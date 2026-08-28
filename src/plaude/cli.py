@@ -50,12 +50,11 @@ def list_recordings(ctx):
 
     async def _list():
         from .ble.client import PlaudClient
-        client = PlaudClient(address, token, verbose=verbose)
+        client = PlaudClient(address, token, verbose=verbose,
+                             creds_path=cfg["device"].get("creds_path", "~/plaud-credentials.md"))
         try:
             await client.connect()
-            if not await client.handshake():
-                click.echo("Handshake failed.", err=True)
-                return
+            await client.handshake()
             await client.time_sync()
             sessions = await client.get_sessions()
             if not sessions:
