@@ -160,23 +160,48 @@ async def recovery_rebind(
     await recovery_client.disconnect()
 
     # Phase 3: reconnect as normal user — device rebinds to `keypair`.
+    # depair changes the device MAC, so if the configured address no longer
+    # resolves, rescan for the device before rebinding.
     last_err: Exception | None = None
+    candidates = [address]
     for attempt in range(retries):
-        try:
-            rebind_client = PlaudClient(address, token, verbose=verbose)
-            await rebind_client.connect()
-            ok = await rebind_client.handshake(creds=new_creds)
-            await rebind_client.disconnect()
-            if ok:
-                return {
-                    "status": "ok",
-                    "creds": new_creds,
-                    "creds_path": str(Path("/tmp/openplaudit-selfbind-creds.md")),
-                    "historical_token": historical_token,
-                    "depair_response": depair_resp.hex() if depair_resp else None,
-                }
-            last_err = RuntimeError("rebind handshake returned False")
-        except Exception as e:
-            last_err = e
-            await asyncio.sleep(1.0)
+        for addr in candidates:
+            try:
+                rebind_client = PlaudClient(addr, token, verbose=verbose)
+                await rebind_client.connect()
+                ok = await rebind_client.handshake(creds=new_creds)
+                await rebind_client.disconnect()
+                if ok:
+                    return {
+                        "status": "ok",
+                        "creds": new_creds,
+                        "creds_path": str(Path("/tmp/openplaudit-selfbind-creds.md")),
+                        "historical_token": historical_token,
+                        "depair_response": depair_resp.hex() if depair_resp else None,
+                        "rebound_address": addr,
+                    }
+                last_err = RuntimeError("rebind handshake returned False")
+            except Exception as e:
+                last_err = e
+        if last_err is not None and attempt < retries - 1:
+            if verbose:
+                print(f"  [recovery] connect failed ({last_err}); rescanning...")
+            await asyncio.sleep(2.0)
+            found = await _rescan_for_plaud(verbose=verbose)
+            if found and found not in candidates:
+                candidates.insert(0, found)
     raise RuntimeError(f"re-bind failed after {retries} attempts: {last_err}")
+
+
+async def _rescan_for_plaud(verbose: bool = False) -> str | None:
+    """Scan for a PLAUD device and return its address, or None."""
+    from bleak import BleakScanner
+
+    devs = await BleakScanner.discover(timeout=8.0, return_adv=True)
+    for addr, (adv, _data) in devs.items():
+        name = getattr(adv, "local_name", "") or ""
+        if "plaud" in name.lower():
+            if verbose:
+                print(f"  [recovery] found {name!r} at {addr}")
+            return addr
+    return None
