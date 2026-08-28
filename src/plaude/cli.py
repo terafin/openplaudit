@@ -79,6 +79,75 @@ def list_recordings(ctx):
 
 
 @main.command()
+@click.argument("session", required=False)
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+@click.pass_context
+def delete(ctx, session, yes):
+    """Delete recording(s) on the device.
+
+    SESSION is an index (from `plaude list`) or 'all' to delete everything.
+    Deletion uses the SDK's cmd 0x1A delete-shaped payload: [now][session][0].
+    """
+    cfg = load_config()
+    address = cfg["device"]["address"]
+    token = cfg["device"]["token"]
+    if not address or not token:
+        click.echo("Error: Device address and token must be configured. Run: plaude config init", err=True)
+        sys.exit(1)
+    verbose = ctx.obj["verbose"]
+
+    async def _delete():
+        from .ble.client import PlaudClient
+        client = PlaudClient(address, token, verbose=verbose,
+                             creds_path=cfg["device"].get("creds_path", "~/plaud-credentials.md"))
+        try:
+            await client.connect()
+            await client.handshake()
+            await client.time_sync()
+            sessions = await client.get_sessions()
+            if not sessions:
+                click.echo("No recordings on device.")
+                return
+            click.echo(f"{len(sessions)} recording(s):")
+            for i, s in enumerate(sessions):
+                ts = datetime.datetime.fromtimestamp(s["session_id"])
+                click.echo(f"  [{i}] {ts.strftime('%Y-%m-%d %H:%M:%S')}  "
+                           f"{s['file_size'] / 1024:.1f} KB  session_id={s['session_id']}")
+
+            targets = []
+            if session is None:
+                click.echo("Pass an index (from the list) or 'all' to delete.")
+                return
+            if session == "all":
+                targets = [s["session_id"] for s in sessions]
+            else:
+                try:
+                    idx = int(session)
+                    targets = [sessions[idx]["session_id"]]
+                except (ValueError, IndexError):
+                    click.echo(f"Invalid session: {session} (use an index or 'all')", err=True)
+                    sys.exit(1)
+
+            if not yes:
+                click.confirm(f"Delete {len(targets)} recording(s)? This cannot be undone.", abort=True)
+
+            for sid in targets:
+                remaining = await client.delete_session(sid)
+                click.echo(f"  Deleted {sid}; {len(remaining)} recording(s) remain.")
+        finally:
+            await client.disconnect()
+
+    try:
+        asyncio.run(_delete())
+    except KeyboardInterrupt:
+        click.echo("\nInterrupted.")
+        sys.exit(130)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
 @click.option("--timeout", "-t", default=15.0, help="Scan timeout in seconds")
 def scan(timeout):
     """Scan for PLAUD BLE devices."""

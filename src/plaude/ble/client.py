@@ -373,6 +373,39 @@ class PlaudClient:
             off += 10
         return entries
 
+    async def delete_session(self, session_id: int) -> list[dict]:
+        """Delete a recording on the device (cmd 0x1A, delete-shaped payload).
+
+        The APK's delete path (mi/r3.D3 -> M) sends cmd 26 (0x1A) with payload
+        [now:4][session_id:4][flag:1=0] — the same command as the list, but
+        with the target session in the middle field. The device responds with
+        the updated session list (parsed like get_sessions).
+        """
+        now = int(time.time())
+        await self.send(CMD_GET_REC_SESSIONS,
+                        struct.pack("<IIB", now, session_id & 0xFFFFFFFF, 0))
+        resp = await self.wait_response(CMD_GET_REC_SESSIONS, timeout=8.0)
+        if resp is None or len(resp) < 9:
+            return []
+        payload = resp[3:]
+        total = struct.unpack("<H", payload[4:6])[0]
+        entries = []
+        off = 8
+        while off + 10 <= len(payload) and len(entries) < total:
+            sid = struct.unpack("<I", payload[off:off + 4])[0]
+            size = struct.unpack("<I", payload[off + 4:off + 8])[0]
+            ftype = payload[off + 8]
+            fidx = payload[off + 9]
+            entries.append({
+                "session_id": sid,
+                "file_size": size,
+                "file_index": fidx,
+                "file_type": ftype,
+                "scene": 0,
+            })
+            off += 10
+        return entries
+
     async def download_file(self, session_id: int, file_index: int,
                             file_size: int, file_type: int = 0,
                             verbose: bool = False, start_offset: int = 0,
