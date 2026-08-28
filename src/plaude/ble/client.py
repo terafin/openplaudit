@@ -340,38 +340,52 @@ class PlaudClient:
         await self.send(CMD_TIME_SYNC, struct.pack("<I", int(time.time())))
         await self.wait_response(CMD_TIME_SYNC, timeout=3.0)
 
-    async def get_sessions(self) -> list[dict]:
+    async def get_sessions(self, retries: int = 6) -> list[dict]:
         """List recordings on the device (GET_REC_SESSIONS cmd 0x1A).
 
+        The device is flaky: while idle it sometimes returns an empty list
+        (total=0) even though recordings exist. We retry a few times with a
+        short delay; a retry with total>0 wins.
+
         Request:  [ts:4][ts:4][flag:1]
-        Response: [type:1][cmd:2][ts:4][total:2LE][entries...]
-          Entry (portVersion>=20, default case in SDK ji/x):
-            [session_id:4][file_size:4][file_type:1][file_index:1]
+        Response (verified raw, firmware 2.2):
+          [type:1][cmd:2][ts:4][total:2 LE][entries...]
+          Entry: [session_id:4][file_size:4][file_type:1][file_index:1]
+            = 10 bytes per entry, starting at payload[6].
         """
-        now = int(time.time())
-        await self.send(CMD_GET_REC_SESSIONS,
-                        struct.pack("<IIB", now, now, 0))
-        resp = await self.wait_response(CMD_GET_REC_SESSIONS, timeout=8.0)
-        if resp is None or len(resp) < 9:
-            return []
-        payload = resp[3:]  # strip [type:1][cmd:2]
-        total = struct.unpack("<H", payload[4:6])[0]
-        entries = []
-        off = 8  # entries start at payload[8:] (= frame offset 11, SDK bArr[11])
-        while off + 10 <= len(payload) and len(entries) < total:
-            session_id = struct.unpack("<I", payload[off:off + 4])[0]
-            file_size = struct.unpack("<I", payload[off + 4:off + 8])[0]
-            file_type = payload[off + 8]
-            file_index = payload[off + 9]
-            entries.append({
-                "session_id": session_id,
-                "file_size": file_size,
-                "file_index": file_index,
-                "file_type": file_type,
-                "scene": 0,
-            })
-            off += 10
-        return entries
+        for attempt in range(max(1, retries)):
+            now = int(time.time())
+            # [now:4][session_id:4=0][flag:1=0] — a non-zero middle field makes
+            # the device interpret this as a delete/filter and return empty.
+            await self.send(CMD_GET_REC_SESSIONS,
+                            struct.pack("<IIB", now, 0, 0))
+            resp = await self.wait_response(CMD_GET_REC_SESSIONS, timeout=6.0)
+            if resp is None or len(resp) < 9:
+                await asyncio.sleep(0.4)
+                continue
+            payload = resp[3:]  # strip [type:1][cmd:2]
+            total = struct.unpack("<H", payload[4:6])[0]
+            if total == 0:
+                await asyncio.sleep(0.4)
+                continue
+            entries = []
+            off = 8  # entries start at payload[8] after [ts:4][total:2][pad:2]
+            while off + 10 <= len(payload) and len(entries) < total:
+                session_id = struct.unpack("<I", payload[off:off + 4])[0]
+                file_size = struct.unpack("<I", payload[off + 4:off + 8])[0]
+                file_type = payload[off + 8]
+                file_index = payload[off + 9]
+                entries.append({
+                    "session_id": session_id,
+                    "file_size": file_size,
+                    "file_index": file_index,
+                    "file_type": file_type,
+                    "scene": 0,
+                })
+                off += 10
+            if entries:
+                return entries
+        return []
 
     async def delete_session(self, session_id: int) -> list[dict]:
         """Delete a recording on the device (cmd 0x1A, delete-shaped payload).
