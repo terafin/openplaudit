@@ -122,13 +122,105 @@ def decode_ogg_opus(raw_data: bytes) -> bytes:
     return b"".join(pcm_chunks)
 
 
+# PLAUD.AI container layout (verified on NB100 firmware 2.2):
+#   [0x000:8]  "PLAUD.AI" magic
+#   [0x008:4]  proto-ish header (version/flags)
+#   [0x00C:4]  header length or file flags
+#   [0x010:...] userid string + metadata
+#   [0x088:12] 12-byte nonce (ChaCha20-style), then
+#   [0x090:4]  payload length 0x50 (80)
+#   ... zero-padding to
+#   [0x110:...] audio region: a sequence of 320-byte blocks, each holding
+#               FOUR interleaved 80-byte Opus frames (a 4-channel recording).
+#               Frames are config-5 hybrid 16 kHz = 40 ms each.
+# The header region up to 0x110 is metadata/padding; the audio starts at
+# 0x110 and each 320-byte block carries one 80-byte frame per channel.
+PLAUD_AI_MAGIC = b"PLAUD.AI"
+PLAUD_AI_AUDIO_OFFSET = 0x110  # verified: stride-80 decode hits ~100% at 0x110
+PLAUD_AI_BLOCK_SIZE = 320      # 4 channels x 80-byte frames interleaved
+PLAUD_AI_FRAME_SIZE = 80
+PLAUD_AI_CHANNELS = 4
+
+
+def extract_plaud_ai_channel(raw_data: bytes, channel: int = 0) -> list[bytes]:
+    """Extract one channel's 80-byte Opus frames from a PLAUD.AI container.
+
+    Each 320-byte block interleaves 4 channels; channel `channel` is the
+    frame at offset `channel * 80` within each block. Frames are config-5
+    hybrid 16 kHz = 40 ms.
+    """
+    if channel < 0 or channel >= PLAUD_AI_CHANNELS:
+        raise ValueError(f"channel must be 0..{PLAUD_AI_CHANNELS - 1}")
+    audio = raw_data[PLAUD_AI_AUDIO_OFFSET:]
+    frames = []
+    i = 0
+    n = len(audio)
+    while i + PLAUD_AI_BLOCK_SIZE <= n:
+        f = audio[i + channel * PLAUD_AI_FRAME_SIZE:
+                  i + channel * PLAUD_AI_FRAME_SIZE + PLAUD_AI_FRAME_SIZE]
+        frames.append(f)
+        i += PLAUD_AI_BLOCK_SIZE
+    return frames
+
+
+def decode_plaud_ai_frames(frames: list[bytes]) -> bytes:
+    """Decode config-5 (40ms) Opus frames to PCM at 16kHz mono."""
+    decoder = opuslib.Decoder(SAMPLE_RATE, CHANNELS)
+    pcm_chunks = []
+    for frame in frames:
+        try:
+            # Config-5 hybrid frames are 40ms = 640 samples.
+            pcm_chunks.append(decoder.decode(frame, 640))
+        except opuslib.OpusError:
+            pcm_chunks.append(b"\x00" * 640 * 2)
+    return b"".join(pcm_chunks)
+
+
+def decode_plaud_ai(raw_data: bytes) -> bytes:
+    """Decode a PLAUD.AI container to PCM, picking the loudest channel.
+
+    The device records 4 interleaved channels; the PLAUD app plays the
+    primary (front) one, but for robustness we decode all four and pick the
+    one with the highest RMS energy (the loudest mic).
+    """
+    best_pcm = None
+    best_rms = -1.0
+    for ch in range(PLAUD_AI_CHANNELS):
+        frames = extract_plaud_ai_channel(raw_data, ch)
+        if not frames:
+            continue
+        pcm = decode_plaud_ai_frames(frames)
+        # RMS of the PCM (16-bit LE mono)
+        n = len(pcm) // 2
+        if n == 0:
+            continue
+        s = 0
+        for i in range(0, len(pcm) - 1, 2):
+            v = pcm[i] | (pcm[i + 1] << 8)
+            if v >= 0x8000:
+                v -= 0x10000
+            s += v * v
+        rms = (s / n) ** 0.5
+        if rms > best_rms:
+            best_rms = rms
+            best_pcm = pcm
+    if best_pcm is None:
+        raise ValueError("No decodable audio found in PLAUD.AI container")
+    return best_pcm
+
+
 def decode_opus_raw(raw_data: bytes) -> bytes:
     """Decode raw PLAUD BLE data to PCM audio.
 
-    Auto-detects the container: OGG/Opus (v20 file-sync) vs raw 89-byte frames.
+    Auto-detects the container: OGG/Opus (v20 file-sync), the "PLAUD.AI"
+    file container (4-channel interleaved Opus), or raw 89-byte frames.
     """
     if raw_data[:4] == OGG_MAGIC:
         return decode_ogg_opus(raw_data)
+
+    if raw_data[:8] == PLAUD_AI_MAGIC:
+        return decode_plaud_ai(raw_data)
+
     frames = extract_opus_frames(raw_data)
     return decode_opus_frames(frames)
 
