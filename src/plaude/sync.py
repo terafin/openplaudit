@@ -158,18 +158,33 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                 _whisper_disabled = True
 
                 if _whisper_disabled:
-                    duration = get_wav_duration(str(wav_path)) or 0.0
-                    result = {
-                        "file": fname,
-                        "duration_seconds": round(duration, 1),
-                        "model": "disabled",
-                        "language": "unknown",
-                        "segments": [],
-                        "text": "",
-                        "note": "Transcription disabled (openai-whisper not installed). See ~/openplaudit-no-whisper.patch.",
-                    }
-                    if not quiet:
-                        print(f"  Transcription disabled (no whisper stack) — {wav_path.name} ({duration:.1f}s)")
+                    # Additive: if an OpenAI-compatible transcription endpoint is
+                    # configured (OPENAI_API_KEY + OPENAI_BASE_URL in env, or
+                    # transcription.api_key), use it instead of the no-op below.
+                    import os as _os
+                    _api_key = cfg.get("transcription", {}).get("api_key") or _os.environ.get("OPENAI_API_KEY")
+                    if _api_key:
+                        from .transcription.whisper import transcribe_via_openai
+                        result = transcribe_via_openai(
+                            str(wav_path),
+                            model=cfg.get("transcription", {}).get("openai_model", "whisper-1"),
+                            api_key=_api_key,
+                        )
+                        if not quiet:
+                            print(f"  Transcribed via OpenAI-compatible endpoint ({result['model']}) — {wav_path.name} ({result['duration_seconds']:.1f}s)")
+                    else:
+                        duration = get_wav_duration(str(wav_path)) or 0.0
+                        result = {
+                            "file": fname,
+                            "duration_seconds": round(duration, 1),
+                            "model": "disabled",
+                            "language": "unknown",
+                            "segments": [],
+                            "text": "",
+                            "note": "Transcription disabled (openai-whisper not installed). See ~/openplaudit-no-whisper.patch.",
+                        }
+                        if not quiet:
+                            print(f"  Transcription disabled (no whisper stack) — {wav_path.name} ({duration:.1f}s)")
                 else:
                     if whisper_model is None:
                         from .transcription.whisper import load_model

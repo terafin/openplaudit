@@ -458,6 +458,10 @@ class PlaudClient:
             if pkt["offset"] == 0xFFFFFFFF:
                 done.set()
                 return
+            # The device may start streaming from a nonzero offset even when we
+            # asked for start_offset=0 (larger files). Adopt the first offset.
+            if expected_offset == start_offset and pkt["offset"] != start_offset:
+                expected_offset = pkt["offset"]
             if pkt["offset"] != expected_offset:
                 error = f"offset mismatch: expected {expected_offset}, got {pkt['offset']}"
                 done.set()

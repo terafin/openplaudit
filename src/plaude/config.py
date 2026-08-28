@@ -25,6 +25,8 @@ DEFAULTS = {
     "transcription": {
         "model": "medium",
         "language": "en",
+        "api_key": "",  # OpenAI-compatible key; falls back to env OPENAI_API_KEY
+        "openai_model": "whisper-1",  # model name for the OpenAI-compatible endpoint
     },
     "sync": {
         "auto_delete_local_audio": False,
