@@ -469,9 +469,14 @@ class PlaudClient:
         expected_offset = start_offset
         done = asyncio.Event()
         error = None
+        # Set when a BLE notification was dropped mid-stream: a data packet
+        # arrived 80 bytes (one Opus frame) ahead of expectation. The outer
+        # loop re-issues SYNC_FILE_HEAD from the gap offset to recover.
+        gap_at = None
+        MAX_GAP_RESENDS = 20
 
         def on_data(frame: bytes):
-            nonlocal expected_offset, error
+            nonlocal expected_offset, error, gap_at
             pkt = parse_file_data_packet(frame)
             # End-of-file marker: offset == 0xFFFFFFFF (4294967295) — a final
             # data packet with the all-ones offset, NOT 0x0000FFFF.
@@ -479,6 +484,11 @@ class PlaudClient:
                 done.set()
                 return
             if pkt["offset"] != expected_offset:
+                # Exactly one 80-byte frame ahead => a dropped notification;
+                # recoverable by resuming from the expected offset.
+                if pkt["offset"] == expected_offset + 80 and gap_at is None:
+                    gap_at = expected_offset
+                    return
                 error = f"offset mismatch: expected {expected_offset}, got {pkt['offset']}"
                 done.set()
                 return
@@ -525,6 +535,23 @@ class PlaudClient:
             await self.send(CMD_SYNC_FILE_HEAD,
                             struct.pack("<III", session_id, start_offset, file_size))
             await _wait_complete()
+            # Recover from dropped BLE notifications: if a gap was detected,
+            # re-issue SYNC_FILE_HEAD from the gap offset so the device
+            # re-sends the missing frame, then continue the stream.
+            resends = 0
+            while gap_at is not None and resends < MAX_GAP_RESENDS:
+                resume = gap_at
+                gap_at = None
+                error = None
+                done = asyncio.Event()
+                resends += 1
+                if self.verbose or verbose:
+                    print(f"\n  [resend] {resends}/{MAX_GAP_RESENDS} from offset {resume}")
+                # Drain stale data frames still queued from the aborted stream.
+                self._file_handler = on_data
+                await self.send(CMD_SYNC_FILE_HEAD,
+                                struct.pack("<III", session_id, resume, file_size))
+                await _wait_complete()
             if error:
                 raise RuntimeError(error)
             if not received:
