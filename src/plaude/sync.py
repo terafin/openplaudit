@@ -135,9 +135,19 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
 
                 # Phase 2: Decode
                 if not wav_path.exists() and raw_data is not None:
-                    if not quiet:
-                        print(f"  Decoding Opus...")
-                    pcm = decode_opus_raw(raw_data)
+                    if raw_data[:8] == b"PLAUD.AI":
+                        # E2EE container: RSA-decrypt the symmetric key, then
+                        # per-segment ChaCha20, then decode raw Opus frames.
+                        from .audio.e2ee import decode_plaud_ai_e2ee
+                        from .ble.client import load_credentials
+                        if not quiet:
+                            print(f"  Decrypting E2EE (PLAUD.AI)...")
+                        creds = load_credentials(creds_path)
+                        pcm = decode_plaud_ai_e2ee(raw_data, creds["rsa_private_key"])
+                    else:
+                        if not quiet:
+                            print(f"  Decoding Opus...")
+                        pcm = decode_opus_raw(raw_data)
                     save_wav(pcm, str(wav_path))
                     duration = len(pcm) / (16000 * 2)
                     if not quiet:
