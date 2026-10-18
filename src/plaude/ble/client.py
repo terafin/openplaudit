@@ -34,6 +34,25 @@ from .protocol import (
 
 DEFAULT_CREDS_PATH = "~/plaud-credentials.md"
 
+# --- File transfer tunables -------------------------------------------------
+# A dropped BLE notification shows up as an offset jump. Real drops arrive in
+# bursts (observed 1840 and 2400 bytes), so any gap up to this size is treated
+# as recoverable by resuming from the expected offset.
+MAX_GAP_BYTES = 65536
+# Consecutive resends at the SAME offset before giving up: no progress is being
+# made, so retrying is pointless.
+MAX_GAP_RESENDS = 20
+# A transfer is stalled when no new bytes arrive for this long. This replaces a
+# flat wall-clock timeout, which killed long-but-live transfers (a multi-hour
+# recording is ~54MB and takes ~45 min over BLE).
+STALL_SECONDS = 120.0
+# Extra stall headroom applied between resends, so "no progress for one stall
+# window" is reported as a stall rather than as the resend-budget error.
+STALL_GRACE_SECONDS = 15.0
+# Progress-file flush interval. Flushing per 80-byte packet would be thousands
+# of syscalls per megabyte.
+PROGRESS_FLUSH_BYTES = 65536
+
 
 class AuthError(Exception):
     """Raised when device authentication fails."""
@@ -458,8 +477,8 @@ class PlaudClient:
         `start_offset` resumes from a previous position (the device accepts a
         nonzero startPosition in SYNC_FILE_HEAD).
 
-        `progress_path`: when set, accumulated bytes are written to this file
-        incrementally so an interrupted transfer (killed process, device drop)
+        `progress_path`: when set, downloaded bytes are APPENDED to this file as
+        they arrive, so an interrupted transfer (killed process, device drop)
         still leaves a valid partial to resume from on the next run.
         """
         if self.verbose or verbose:
@@ -469,34 +488,103 @@ class PlaudClient:
         expected_offset = start_offset
         done = asyncio.Event()
         error = None
-        # Set when a BLE notification was dropped mid-stream: a data packet
-        # arrived 80 bytes (one Opus frame) ahead of expectation. The outer
-        # loop re-issues SYNC_FILE_HEAD from the gap offset to recover.
+        # Set when a BLE notification was dropped mid-stream. The outer loop
+        # re-issues SYNC_FILE_HEAD from the gap offset to recover.
         gap_at = None
-        MAX_GAP_RESENDS = 20
+
+        # Progress file. The old code rewrote the WHOLE accumulated buffer every
+        # 20KB, synchronously inside the BLE notification callback — so a 900KB
+        # download wrote 900KB to disk per 20KB received (~45x the file size in
+        # total I/O). That blocked the event loop, overflowed CoreBluetooth's
+        # buffers, and dropped notifications in bursts, which is why transfers
+        # consistently died at 90-93%. Append instead: one write per packet.
+        progress_fh = None
+        if progress_path is not None:
+            try:
+                p = Path(progress_path)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                if start_offset == 0:
+                    progress_fh = p.open("wb")
+                elif p.exists() and p.stat().st_size == start_offset:
+                    # Resume: preload the prefix we already have so `received`
+                    # is always the WHOLE file from offset 0. Without this the
+                    # return value would be only the tail, and callers that
+                    # write it to disk would clobber the partial they resumed
+                    # from.
+                    received.extend(p.read_bytes())
+                    progress_fh = p.open("ab")
+                else:
+                    # Asked to resume but the partial is missing or the wrong
+                    # length. Refuse rather than silently producing a file with
+                    # a hole in the middle.
+                    raise RuntimeError(
+                        f"Cannot resume from {start_offset}: {p} is missing or "
+                        f"has a different size")
+            except RuntimeError:
+                raise
+            except Exception:
+                progress_fh = None
+
+        # Resuming without a usable partial would leave a hole at the start.
+        if start_offset > 0 and len(received) != start_offset:
+            raise RuntimeError(
+                f"Cannot resume from {start_offset}: no partial available "
+                f"(pass progress_path pointing at the existing file)")
+
+        last_progress = time.monotonic()
+        flushed_to = start_offset
+        # Set just before re-issuing SYNC_FILE_HEAD after a gap: while set, only
+        # a frame at exactly this offset is accepted, so stale frames still in
+        # flight from the aborted stream are discarded instead of being spliced
+        # into the file.
+        resync_from = None
 
         def on_data(frame: bytes):
-            nonlocal expected_offset, error, gap_at
+            nonlocal expected_offset, error, gap_at, last_progress, resync_from, flushed_to
             pkt = parse_file_data_packet(frame)
             # End-of-file marker: offset == 0xFFFFFFFF (4294967295) — a final
             # data packet with the all-ones offset, NOT 0x0000FFFF.
             if pkt["offset"] == 0xFFFFFFFF:
                 done.set()
                 return
+            # Ignore frames belonging to a different session. Without this,
+            # frames still arriving from the PREVIOUS recording land in this
+            # file's handler, which expects offset 0 — producing the observed
+            # "expected 0, got <huge>" failures on every file after the first.
+            if pkt["session_id"] != session_id:
+                return
+            # A gap is pending: ignore the remainder of the aborted stream until
+            # the resend is issued.
+            if gap_at is not None:
+                return
+            if resync_from is not None:
+                if pkt["offset"] != resync_from:
+                    return  # stale frame from the aborted stream
+                resync_from = None
             if pkt["offset"] != expected_offset:
-                # Exactly one 80-byte frame ahead => a dropped notification;
-                # recoverable by resuming from the expected offset.
-                if pkt["offset"] == expected_offset + 80 and gap_at is None:
+                gap = pkt["offset"] - expected_offset
+                if 0 < gap <= MAX_GAP_BYTES:
+                    # Dropped notification(s). Recover by resuming from the
+                    # offset we still need; the device re-sends from there.
                     gap_at = expected_offset
+                    done.set()
                     return
-                error = f"offset mismatch: expected {expected_offset}, got {pkt['offset']}"
+                error = (f"offset mismatch: expected {expected_offset}, "
+                         f"got {pkt['offset']} (gap {gap})")
                 done.set()
                 return
             received.extend(pkt["data"])
             expected_offset += len(pkt["data"])
-            if progress_path is not None and (expected_offset - start_offset) % 20000 < len(pkt["data"]):
+            last_progress = time.monotonic()
+            if progress_fh is not None:
                 try:
-                    Path(progress_path).write_bytes(received)
+                    progress_fh.write(pkt["data"])
+                    # Flush on a size interval, not per packet: one syscall per
+                    # 80-byte frame would be thousands of calls per megabyte.
+                    # 64KB keeps crash-resilience while staying cheap.
+                    if expected_offset - flushed_to >= PROGRESS_FLUSH_BYTES:
+                        progress_fh.flush()
+                        flushed_to = expected_offset
                 except Exception:
                     pass
             if self.verbose or verbose:
@@ -505,57 +593,122 @@ class PlaudClient:
 
         self._file_handler = on_data
 
-        async def _wait_complete(timeout=300.0):
+        async def _wait_complete(head_timeout=10.0, stall_grace=0.0):
             # 1) Wait for the SYNC_FILE_HEAD response (cmd 28) — confirms the
             #    device accepted the head and is about to stream data.
-            head = await self.wait_response(CMD_SYNC_FILE_HEAD, timeout=10.0)
+            head = await self.wait_response(CMD_SYNC_FILE_HEAD, timeout=head_timeout)
             if head is None:
                 raise RuntimeError("No SYNC_FILE_HEAD response from device")
-            # 2) Then wait for the data stream to finish: either the EOF data
-            #    marker (offset==0xFFFFFFFF) or SYNC_FILE_TAIL (cmd 0x1D).
-            data_done = asyncio.create_task(done.wait())
-            tail_done = asyncio.create_task(self._get_queue(CMD_SYNC_FILE_TAIL).get())
-            try:
-                await asyncio.wait([data_done, tail_done], timeout=timeout,
-                                   return_when=asyncio.FIRST_COMPLETED)
-                if not (data_done.done() or tail_done.done()):
-                    raise RuntimeError(f"File transfer timed out at {expected_offset}/{file_size}")
-            finally:
-                data_done.cancel()
-                tail_done.cancel()
+            # 2) Wait for the data stream to finish: either the EOF data marker
+            #    (offset==0xFFFFFFFF), SYNC_FILE_TAIL (cmd 0x1D), a hard error,
+            #    or a stall (no new bytes for STALL_SECONDS). A stall check
+            #    replaces the old flat wall-clock timeout so that long-but-live
+            #    transfers are not killed while a dead device is detected fast.
+            while True:
+                # A gap pending means this pass is finished: stop waiting so the
+                # caller can trim the buffer and re-issue from the gap offset.
+                if done.is_set() or error is not None or gap_at is not None:
+                    break
+                # The tail (cmd 0x1D) is the protocol's other EOF signal; a
+                # device that ends a stream this way must not be treated as a
+                # stall.
+                if not self._get_queue(CMD_SYNC_FILE_TAIL).empty():
+                    break
+                _stall = globals()["STALL_SECONDS"]
+                if time.monotonic() - last_progress > _stall + stall_grace:
+                    # Report where we actually got to — the partial on disk is
+                    # resumable, so this is recoverable on the next run.
+                    raise RuntimeError(
+                        f"Transfer stalled at {expected_offset}/{file_size} "
+                        f"(no data for {_stall + stall_grace:.0f}s)")
+                await asyncio.sleep(0.25)
+            if error is not None:
+                raise RuntimeError(error)
 
         try:
-            # Drain any stale GET_REC_SESSIONS frames so they don't get routed
-            # to the file handler and misread as data packets.
-            try:
-                while not self._get_queue(CMD_GET_REC_SESSIONS).empty():
-                    self._get_queue(CMD_GET_REC_SESSIONS).get_nowait()
-            except Exception:
-                pass
+            # Drain stale control frames before starting. GET_REC_SESSIONS
+            # frames must not reach the data handler; a leftover SYNC_FILE_TAIL
+            # would make _wait_complete report this transfer complete the
+            # instant it starts (the tail is used as an EOF signal).
+            for _stale in (CMD_GET_REC_SESSIONS, CMD_SYNC_FILE_TAIL):
+                try:
+                    while not self._get_queue(_stale).empty():
+                        self._get_queue(_stale).get_nowait()
+                except Exception:
+                    pass
             await self.send(CMD_SYNC_FILE_HEAD,
                             struct.pack("<III", session_id, start_offset, file_size))
             await _wait_complete()
             # Recover from dropped BLE notifications: if a gap was detected,
             # re-issue SYNC_FILE_HEAD from the gap offset so the device
-            # re-sends the missing frame, then continue the stream.
+            # re-sends what we're missing, then continue the stream.
+            #
+            # MAX_GAP_RESENDS bounds resends *per gap*, not per transfer. A
+            # transfer makes progress between gaps, so a single global budget
+            # would be exhausted by a few hiccups on a long recording and
+            # abort a transfer that was still moving. A run of consecutive
+            # gaps at the SAME offset means no progress is being made, and
+            # that is what has to be abandoned.
             resends = 0
-            while gap_at is not None and resends < MAX_GAP_RESENDS:
+            resends_at_offset = 0
+            last_resume = -1
+            while gap_at is not None:
                 resume = gap_at
                 gap_at = None
-                error = None
-                done = asyncio.Event()
+                if resume == last_resume:
+                    resends_at_offset += 1
+                else:
+                    resends_at_offset = 1
+                    last_resume = resume
+                if resends_at_offset > MAX_GAP_RESENDS:
+                    raise RuntimeError(
+                        f"Transfer stuck at {resume}/{file_size}: "
+                        f"{MAX_GAP_RESENDS} resends made no progress")
                 resends += 1
                 if self.verbose or verbose:
-                    print(f"\n  [resend] {resends}/{MAX_GAP_RESENDS} from offset {resume}")
-                # Drain stale data frames still queued from the aborted stream.
-                self._file_handler = on_data
+                    print(f"\n  [resend] #{resends} (x{resends_at_offset} at this "
+                          f"offset) from {resume}")
+                # Discard everything at/after the resume point. The device
+                # re-sends from `resume`, so keeping the stale tail would
+                # splice a duplicated block into the middle of the file — it
+                # would still decode, silently wrong. Trim to the resume point
+                # and seek the progress file back to match. Indices are
+                # ABSOLUTE because `received` holds the whole file from 0.
+                if 0 <= resume < expected_offset:
+                    del received[resume:]
+                    expected_offset = resume
+                    if progress_fh is not None:
+                        try:
+                            progress_fh.seek(resume)
+                            progress_fh.truncate()
+                        except Exception:
+                            pass
+                # `error` is deliberately NOT cleared here: if a resend raises a
+                # hard error, clearing it would swallow the failure and the
+                # loop would exit looking like success (the old bug). The
+                # handler overwrites it on a new hard error anyway.
+                #
+                # Reset the per-pass completion signal. `done` was set by the
+                # gap that got us here; leaving it set would make this pass
+                # return immediately, reporting a truncated file as success.
+                done = asyncio.Event()
+                last_progress = time.monotonic()
+                # Accept only a frame at exactly `resume` until it arrives, so
+                # stale frames from the aborted stream are discarded.
+                resync_from = resume
                 await self.send(CMD_SYNC_FILE_HEAD,
                                 struct.pack("<III", session_id, resume, file_size))
-                await _wait_complete()
-            if error:
-                raise RuntimeError(error)
+                await _wait_complete(head_timeout=10.0,
+                                     stall_grace=STALL_GRACE_SECONDS)
             if not received:
                 raise RuntimeError("Transfer completed but no data received")
+            # The device reported a smaller file than it listed. Everything it
+            # sent, we got, but the recording itself is short — don't report a
+            # truncated file as a clean success.
+            if file_size and expected_offset < file_size:
+                raise RuntimeError(
+                    f"Transfer incomplete: device listed {file_size} bytes but "
+                    f"sent {expected_offset}")
         finally:
             # Close the transfer session with the REAL sync-stop (cmd 30,
             # [sessionId:4]) — ii/u0. Never send cmd 0x16 / [0][1] here:
@@ -565,7 +718,15 @@ class PlaudClient:
                 await self.send(CMD_SYNC_FILE_STOP, struct.pack("<I", session_id))
             except Exception:
                 pass
+            # Clear the handler BEFORE closing the file so late notifications
+            # that land after close cannot raise (they'd be swallowed anyway,
+            # but ordering keeps the intent obvious).
             self._file_handler = None
+            if progress_fh is not None:
+                try:
+                    progress_fh.close()
+                except Exception:
+                    pass
             if self.verbose or verbose:
                 print()
 

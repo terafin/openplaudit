@@ -101,6 +101,20 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                 wav_path = dirs["audio"] / f"{fname}.wav"
 
                 if needs_download(state, sid):
+                    # Resume from a partial left by an interrupted transfer.
+                    # The device honours a nonzero startPos in SYNC_FILE_HEAD,
+                    # and download_file appends from that offset.
+                    resume_from = 0
+                    if raw_path and raw_path.exists():
+                        have = raw_path.stat().st_size
+                        if 0 < have < s["file_size"]:
+                            resume_from = have
+                            if not quiet:
+                                print(f"  Resuming from {have}/{s['file_size']} bytes "
+                                      f"({have / s['file_size'] * 100:.1f}%)")
+                        elif have >= s["file_size"]:
+                            resume_from = 0  # complete-looking; re-fetch cleanly
+
                     if not quiet:
                         print(f"\nDownloading {display_time} ({s['file_size'] / 1024:.1f} KB)...")
 
@@ -108,6 +122,7 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                                                    file_index=s.get("file_index"),
                                                    file_type=s.get("file_type", 0),
                                                    verbose=verbose,
+                                                   start_offset=resume_from,
                                                    progress_path=str(raw_path) if raw_path else None)
 
                     if raw_path:
