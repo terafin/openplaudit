@@ -27,6 +27,9 @@ DEFAULTS = {
         "language": "en",
         "api_key": "",  # OpenAI-compatible key; falls back to env OPENAI_API_KEY
         "openai_model": "whisper-1",  # model name for the OpenAI-compatible endpoint
+        # Hosted endpoints cap audio duration (vLLM defaults to 600s). Audio
+        # longer than this is split, transcribed piecewise, and stitched.
+        "chunk_seconds": 540,
     },
     "sync": {
         "auto_delete_local_audio": False,

@@ -35,6 +35,11 @@ CMD_RECORD = 0x14
 CMD_SYNC_FILE_HEAD = 0x1C
 CMD_SYNC_FILE_TAIL = 0x1D
 CMD_SYNC_FILE_STOP = 0x1E
+# CRC handshake after the tail: host sends its own CRC (cmd 116), device
+# acknowledges (cmd 117). Per docs/plaude-documentation.md the tail carries
+# [session_id:4][crc:2LE] and 0xFFFF means "skip verification".
+CMD_FILE_CHECKSUM = 0x74      # 116
+CMD_FILE_CHECKSUM_RSP = 0x75  # 117
 
 # v20+ pre-handshake opcodes (project 888/881 use 0xFE20, not 0xFE10)
 CMD_PRE_HANDSHAKE_NEW = 0xFE20
@@ -59,6 +64,7 @@ CMD_NAMES = {
     0x17: "FILE_SYNC_CONFIG", 0x18: "DELETE_FILE",
     0x1A: "GET_REC_SESSIONS",
     0x1C: "SYNC_FILE_HEAD", 0x1D: "SYNC_FILE_TAIL",
+    0x74: "FILE_CHECKSUM", 0x75: "FILE_CHECKSUM_RSP",
     0xFE20: "PRE_HANDSHAKE_NEW", 0xFE11: "PRE_HANDSHAKE_CNF",
     0xFE12: "SEND_RSA_PUBKEY",
 }
@@ -165,6 +171,17 @@ def parse_file_data_packet(frame: bytes) -> dict:
         "chunk_len": chunk_len,
         "data": frame[10:10 + chunk_len],
     }
+
+
+def parse_tail_crc(frame: bytes) -> int | None:
+    """Extract the device CRC from a SYNC_FILE_TAIL (cmd 0x1D) frame.
+
+    Layout: [type:1][cmd:2LE][session_id:4][crc:2LE]. Returns None if the frame
+    is too short, or 0xFFFF (which the device uses to mean "skip verification").
+    """
+    if len(frame) < 9:
+        return None
+    return struct.unpack("<H", frame[7:9])[0]
 
 
 def crc16_ccitt(data: bytes) -> int:

@@ -393,3 +393,80 @@ async def test_short_transfer_is_not_reported_as_success():
     # Claim a larger file than the device will actually send.
     with pytest.raises(RuntimeError, match="Transfer incomplete"):
         await client.download_file(SESSION, 0, 9000)
+
+
+def _tail_with_crc(session_id: int, crc: int) -> bytes:
+    return (bytes([PROTO_COMMAND]) + struct.pack("<H", CMD_SYNC_FILE_TAIL)
+            + struct.pack("<I", session_id) + struct.pack("<H", crc))
+
+
+def _crc_client(payload: bytes, device_crc: int | None):
+    """Client whose device ends the stream with SYNC_FILE_TAIL + a CRC."""
+    from plaude.ble.protocol import crc16_ccitt
+    client = PlaudClient.__new__(PlaudClient)
+    client.address = "00:00:00:00:00:00"
+    client.token = "t"
+    client.verbose = False
+    client.creds_path = None
+    client._queues = {}
+    client._file_handler = None
+    client.authenticated = True
+    client.port_version = 20
+    client.crypto = None
+    client._get_queue = PlaudClient._get_queue.__get__(client)
+    sent = []
+
+    async def fake_wait_response(cmd_id, timeout=5.0):
+        return b"\x00" * 5
+
+    async def fake_send(cmd_id, payload_=b""):
+        sent.append((cmd_id, payload_))
+        if cmd_id != CMD_SYNC_FILE_HEAD:
+            return
+        handler = client._file_handler
+        for off in range(0, len(payload), 80):
+            handler(_data_packet(SESSION, off, payload[off:off + 80]))
+        # End via TAIL rather than the 0xFFFFFFFF marker.
+        if device_crc is None:
+            handler(_eof_packet(SESSION))
+        else:
+            client._get_queue(CMD_SYNC_FILE_TAIL).put_nowait(
+                _tail_with_crc(SESSION, device_crc))
+            # Give the poll loop a tick to notice the tail.
+            await asyncio.sleep(0.3)
+
+    client.send = fake_send
+    client.wait_response = fake_wait_response
+    client._sent = sent
+    return client
+
+
+@pytest.mark.asyncio
+async def test_crc_match_accepted():
+    from plaude.ble.protocol import crc16_ccitt
+    payload = bytes((i * 29) % 251 for i in range(4000))
+    client = _crc_client(payload, crc16_ccitt(payload))
+    out = await client.download_file(SESSION, 0, len(payload))
+    assert out == payload
+    checksum_sends = [p for c, p in client._sent if c == 116]
+    assert checksum_sends, "host must acknowledge with FILE_CHECKSUM (cmd 116)"
+    assert checksum_sends[0][0] == 0, "ack payload starts with 0x00"
+    assert struct.unpack_from("<H", checksum_sends[0], 1)[0] == crc16_ccitt(payload)
+
+
+@pytest.mark.asyncio
+async def test_crc_mismatch_rejected():
+    """Corrupted data must fail loudly rather than be saved as a good file."""
+    payload = bytes((i * 31) % 251 for i in range(4000))
+    client = _crc_client(payload, 0x1234)  # deliberately wrong
+    with pytest.raises(RuntimeError, match="CRC mismatch"):
+        await client.download_file(SESSION, 0, len(payload))
+
+
+@pytest.mark.asyncio
+async def test_crc_0xffff_means_skip():
+    """The device signals 'skip verification' with 0xFFFF."""
+    payload = bytes((i * 37) % 251 for i in range(4000))
+    client = _crc_client(payload, 0xFFFF)
+    out = await client.download_file(SESSION, 0, len(payload))
+    assert out == payload

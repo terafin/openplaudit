@@ -189,14 +189,22 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                     import os as _os
                     _api_key = cfg.get("transcription", {}).get("api_key") or _os.environ.get("OPENAI_API_KEY")
                     if _api_key:
-                        from .transcription.whisper import transcribe_via_openai
+                        from .transcription.whisper import (
+                            transcribe_via_openai, DEFAULT_CHUNK_SECONDS,
+                        )
                         result = transcribe_via_openai(
                             str(wav_path),
                             model=cfg.get("transcription", {}).get("openai_model", "whisper-1"),
                             api_key=_api_key,
+                            chunk_seconds=int(cfg.get("transcription", {}).get(
+                                "chunk_seconds", DEFAULT_CHUNK_SECONDS)),
                         )
                         if not quiet:
-                            print(f"  Transcribed via OpenAI-compatible endpoint ({result['model']}) — {wav_path.name} ({result['duration_seconds']:.1f}s)")
+                            chunked = result.get("chunks")
+                            how = f", {chunked} chunks" if chunked else ""
+                            print(f"  Transcribed via OpenAI-compatible endpoint "
+                                  f"({result['model']}{how}) — {wav_path.name} "
+                                  f"({result['duration_seconds']:.1f}s)")
                     else:
                         duration = get_wav_duration(str(wav_path)) or 0.0
                         result = {

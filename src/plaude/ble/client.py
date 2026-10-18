@@ -30,6 +30,8 @@ from .protocol import (
     CHUNK_SIZE, HANDSHAKE_STATUS, build_cmd, build_pre_handshake_chunk,
     build_handshake_packet, build_two_handshake_packet, build_sync_time_packet,
     parse_handshake_response, parse_ssn_response, parse_file_data_packet,
+    parse_tail_crc, crc16_ccitt,
+    CMD_FILE_CHECKSUM, CMD_FILE_CHECKSUM_RSP,
 )
 
 DEFAULT_CREDS_PATH = "~/plaud-credentials.md"
@@ -531,6 +533,9 @@ class PlaudClient:
                 f"Cannot resume from {start_offset}: no partial available "
                 f"(pass progress_path pointing at the existing file)")
 
+        # Holds the SYNC_FILE_TAIL frame when the device ends a stream that way;
+        # it carries the CRC we verify against.
+        tail_frame: list = [None]
         last_progress = time.monotonic()
         flushed_to = start_offset
         # Set just before re-issuing SYNC_FILE_HEAD after a gap: while set, only
@@ -612,7 +617,9 @@ class PlaudClient:
                 # The tail (cmd 0x1D) is the protocol's other EOF signal; a
                 # device that ends a stream this way must not be treated as a
                 # stall.
-                if not self._get_queue(CMD_SYNC_FILE_TAIL).empty():
+                tail_q = self._get_queue(CMD_SYNC_FILE_TAIL)
+                if not tail_q.empty():
+                    tail_frame[0] = tail_q.get_nowait()
                     break
                 _stall = globals()["STALL_SECONDS"]
                 if time.monotonic() - last_progress > _stall + stall_grace:
@@ -702,6 +709,27 @@ class PlaudClient:
                                      stall_grace=STALL_GRACE_SECONDS)
             if not received:
                 raise RuntimeError("Transfer completed but no data received")
+            # Integrity handshake. The tail frame carries the device's CRC of
+            # the payload; compare it against ours and acknowledge, matching the
+            # shipped Swift engine. 0xFFFF means "device skipped verification".
+            if tail_frame[0] is not None:
+                device_crc = parse_tail_crc(tail_frame[0])
+                local_crc = crc16_ccitt(bytes(received))
+                crc_skipped = device_crc is None or device_crc == 0xFFFF
+                try:
+                    await self.send(CMD_FILE_CHECKSUM,
+                                    struct.pack("<BH", 0, local_crc))
+                    await self.wait_response(CMD_FILE_CHECKSUM_RSP, timeout=5.0)
+                except Exception:
+                    pass
+                if not crc_skipped and device_crc != local_crc:
+                    raise RuntimeError(
+                        f"CRC mismatch: device=0x{device_crc:04x} "
+                        f"local=0x{local_crc:04x} — data corrupted in transit")
+                if self.verbose or verbose:
+                    state = "skipped by device" if crc_skipped else (
+                        "OK" if device_crc == local_crc else "MISMATCH")
+                    print(f"\n  [crc] 0x{local_crc:04x} {state}")
             # The device reported a smaller file than it listed. Everything it
             # sent, we got, but the recording itself is short — don't report a
             # truncated file as a clean success.
