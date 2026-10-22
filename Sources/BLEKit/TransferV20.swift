@@ -58,6 +58,18 @@ public struct V20Assembler: Sendable {
 }
 
 extension PlaudClient {
+    /// Tell the device a recording is safely on our side.
+    ///
+    /// Verified: sending this alone drops the session from the device's list
+    /// (6 -> 5) without a transfer. It is how a recording is freed, since there
+    /// is no BLE delete command.
+    public func releaseSession(_ sessionID: UInt32) async {
+        var payload = Data()
+        var sid = sessionID.littleEndian
+        payload.append(Data(bytes: &sid, count: 4))
+        try? await send(cmdSyncFileStop, payload: payload)
+    }
+
     /// Battery percentage (cmd 9 BATT_STATUS).
     ///
     /// Response payload is `[status, level]` — verified on hardware: `01 3a`
@@ -71,24 +83,6 @@ extension PlaudClient {
         } catch {
             return nil
         }
-    }
-
-    /// Delete a recording on the device.
-    ///
-    /// cmd 0x1A is shared between "list" and "delete": a non-zero middle field
-    /// marks the session to remove (payload `[now:4][session:4][0]`). Returns
-    /// true when the session is gone from the refreshed list.
-    public func deleteSession(_ sessionID: UInt32) async throws -> Bool {
-        var payload = Data()
-        var now = UInt32(Date().timeIntervalSince1970).littleEndian
-        var sid = sessionID.littleEndian
-        payload.append(Data(bytes: &now, count: 4))
-        payload.append(Data(bytes: &sid, count: 4))
-        payload.append(0)
-        try await send(cmdGetRecSessions, payload: payload)
-        _ = await waitResponse(cmdGetRecSessions, timeout: 8.0)
-        let remaining = try await getSessions()
-        return !remaining.contains { $0.sessionID == sessionID }
     }
 
     /// Download a v20 recording. Returns the raw file bytes (the PLAUD.AI
@@ -163,6 +157,16 @@ extension PlaudClient {
             throw DownloadError(
                 "Transfer incomplete: \(final.expected)/\(fileSize) bytes")
         }
+
+        // Close the transfer. This is what makes the device mark the recording
+        // as transferred and free its space — verified on hardware: sending it
+        // dropped the session count from 7 to 6. There is no BLE delete
+        // command; STOP is the only mechanism.
+        var stop = Data()
+        var sid = sessionID.littleEndian
+        stop.append(Data(bytes: &sid, count: 4))
+        try? await send(cmdSyncFileStop, payload: stop)
+
         return Data(final.bytes)
     }
 }

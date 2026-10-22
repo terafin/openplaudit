@@ -30,6 +30,8 @@ final class DeviceSyncModel: ObservableObject {
     @Published private(set) var devices: [DiscoveredDevice] = []
     @Published private(set) var recordings: [RecordingSession] = []
     @Published private(set) var battery: Int?
+    /// Short line under the Sync button: what the last run did, and when.
+    @Published private(set) var lastResultLine: String?
     @Published private(set) var deviceName: String?
     @Published private(set) var lastTranscriptPath: URL?
     @Published var credentialsMarkdown: String = ""
@@ -176,17 +178,6 @@ final class DeviceSyncModel: ObservableObject {
     /// Sync automatically when the screen appears, if everything is configured
     /// and a device was used before. Runs once per launch so returning to the
     /// tab does not kick off another transfer.
-    /// Delete the recording from the device once its note is safely delivered.
-    /// Off by default would be safer, but the device is small and the whole
-    /// point is that the phone is the destination.
-    @Published var removeAfterSync: Bool =
-        (UserDefaults.standard.object(forKey: "plaud.removeAfterSync") as? Bool) ?? true
-
-    func setRemoveAfterSync(_ on: Bool) {
-        removeAfterSync = on
-        UserDefaults.standard.set(on, forKey: "plaud.removeAfterSync")
-    }
-
     @Published var autoSyncOnOpen: Bool =
         (UserDefaults.standard.object(forKey: "plaud.autoSync") as? Bool) ?? true
     private var lastAutoSyncAt: Date?
@@ -281,6 +272,14 @@ final class DeviceSyncModel: ObservableObject {
             let transcriber = Transcriber(endpoint: url, apiKey: apiKey, model: model)
             var completed = 0
 
+
+            // Anything already delivered but still on the device only needs to
+            // be released — the note exists, so no re-download. Without this,
+            // ledger entries from before STOP was implemented stay forever.
+            for session in sessions where syncedIDs.contains(session.sessionID) {
+                await client.releaseSession(session.sessionID)
+            }
+
             for session in sessions {
                 if !force, syncedIDs.contains(session.sessionID) { continue }
                 if let max = maxRecordingBytes, Int(session.fileSize) > max {
@@ -328,16 +327,15 @@ final class DeviceSyncModel: ObservableObject {
                                                     name: Self.fileName(for: session.sessionID),
                                                     sessionID: session.sessionID)
                 markSynced(session.sessionID)
-                if removeAfterSync {
-                    _ = try? await client.deleteSession(session.sessionID)
-                }
                 completed += 1
             }
 
             battery = await client.batteryLevel() ?? battery
             recordings = (try? await client.getSessions()) ?? []
             await client.disconnect()
-            stage = .done("Synced \(completed) recording\(completed == 1 ? "" : "s")")
+            let msg = "Synced \(completed) recording\(completed == 1 ? "" : "s")"
+            stage = .done(msg)
+            lastResultLine = "\(msg) · \(Self.clockNow())"
         } catch {
             await client.disconnect()
             stage = .failed(error.localizedDescription)
@@ -393,6 +391,10 @@ final class DeviceSyncModel: ObservableObject {
     }
 
     /// `2026-10-22` — ISO date, safe on every filesystem.
+    static func clockNow() -> String {
+        let f = DateFormatter(); f.dateFormat = "HH:mm"; return f.string(from: Date())
+    }
+
     static func folderDay(_ date: Date) -> String {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"

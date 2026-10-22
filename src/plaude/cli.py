@@ -133,8 +133,15 @@ def delete(ctx, session, yes):
                 click.confirm(f"Delete {len(targets)} recording(s)? This cannot be undone.", abort=True)
 
             for sid in targets:
-                remaining = await client.delete_session(sid)
-                click.echo(f"  Deleted {sid}; {len(remaining)} recording(s) remain.")
+                await client.delete_session(sid)
+                remaining = await client.get_sessions()
+                if any(s["session_id"] == sid for s in remaining):
+                    click.echo(
+                        f"  Session {sid} is still on the device. This firmware has no "
+                        f"BLE delete command — recordings are removed by the device "
+                        f"itself once a transfer completes.")
+                else:
+                    click.echo(f"  Deleted {sid}; {len(remaining)} recording(s) remain.")
         finally:
             await client.disconnect()
 

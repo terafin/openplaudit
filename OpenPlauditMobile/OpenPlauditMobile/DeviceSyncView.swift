@@ -36,11 +36,8 @@ struct DeviceSyncView: View {
                         Toggle("Sync when I open the app", isOn: Binding(
                             get: { model.autoSyncOnOpen },
                             set: { model.setAutoSync($0) }))
-                        Toggle("Remove from recorder after sync", isOn: Binding(
-                            get: { model.removeAfterSync },
-                            set: { model.setRemoveAfterSync($0) }))
                     } footer: {
-                        Text("iOS suspends Bluetooth apps in the background, so a transfer has to run with the app open. Recordings are only removed once their note has been delivered.")
+                        Text("iOS suspends Bluetooth apps in the background, so a transfer has to run with the app open. The recorder frees a recording itself once a transfer completes.")
                     }
                     deviceSection
                     if !model.recordings.isEmpty { recordingsSection }
@@ -123,11 +120,25 @@ struct DeviceSyncView: View {
                     Spacer()
                 }
                 Button {
-                    Task { await model.sync(address: address, force: true) }
+                    Task { await model.sync(address: address) }
                 } label: {
-                    Label("Sync now", systemImage: "arrow.triangle.2.circlepath")
+                    HStack {
+                        Label(model.isBusy ? "Syncing…" : "Sync now",
+                              systemImage: "arrow.triangle.2.circlepath")
+                        Spacer()
+                        if model.isBusy { ProgressView() }
+                    }
                 }
                 .disabled(!isIdle)
+
+                if case .downloading(let p) = model.stage {
+                    ProgressView(value: p) { Text("\(Int(p * 100))%") }
+                }
+                if let line = model.lastResultLine {
+                    Text(line)
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.textTertiary)
+                }
                 Button("Pair a different recorder") { showScanner = true }
                     .font(Theme.caption)
             } else {
@@ -136,7 +147,7 @@ struct DeviceSyncView: View {
                 } else {
                     ForEach(model.devices, id: \.identifier) { device in
                         Button {
-                            Task { await model.sync(address: device.identifier.uuidString, force: true) }
+                            Task { await model.sync(address: device.identifier.uuidString) }
                         } label: {
                             HStack {
                                 Text(device.name)
