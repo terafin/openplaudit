@@ -128,13 +128,14 @@ async def test_download_recoverable_gap_resends():
 
 
 @pytest.mark.asyncio
-async def test_download_non_80_gap_is_error():
-    """A non-80 gap is a hard error, not a resend."""
+async def test_gap_larger_than_max_is_error():
+    """A gap beyond MAX_GAP_BYTES is a hard error; smaller gaps are resent."""
+    from plaude.ble.client import MAX_GAP_BYTES
     frames = [
         _data_packet(100, 0, b"A" * 80),
-        _data_packet(100, 300, b"Z" * 80),  # not +80: hard mismatch
+        _data_packet(100, MAX_GAP_BYTES + 160, b"Z" * 80),
         _eof_packet(100),
     ]
     client, calls = _make_client(frames)
     with pytest.raises(RuntimeError):
-        await client.download_file(100, 0, 400)
+        await client.download_file(100, 0, MAX_GAP_BYTES + 400)

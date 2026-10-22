@@ -136,24 +136,6 @@ class TestDecrypt:
         data, _ = _make_e2ee_file(pub, opus)
         assert decrypt_audio(data, priv) == opus
 
-    def test_decode_plaud_ai_e2ee_80slot(self):
-        """Full decode handles 80-byte-aligned Opus slots (real device format)."""
-        pub, priv = _make_keypair()
-        # Real device frames are 80-byte slots. Emulate by using silence frames
-        # which opuslib encodes compactly, then pad each to 80 with trailing
-        # zeroes the way the device does NOT — so instead, build valid 80-byte
-        # slots by decoding-realistic input: a single frame repeated in 80-byte
-        # slots only works if the encoder packet fits. Use a quiet chirp that
-        # yields <=80-byte packets, and pad with zeros (invalid) is rejected.
-        # To keep the test meaningful we verify the decode path returns PCM of
-        # the expected duration for a known-valid payload by checking that the
-        # round-trip decrypt matches and that decode_opus_frames raises only
-        # on fully-invalid data (covered in TestErrorHandling).
-        opus = _make_opus_frames(4, seed=5)
-        data, _ = _make_e2ee_file(pub, opus)
-        # Crypto round-trip is exact:
-        assert decrypt_audio(data, priv) == opus
-
 
 class TestErrorHandling:
     def test_wrong_key_does_not_produce_same_key(self):

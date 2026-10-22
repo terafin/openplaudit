@@ -105,27 +105,43 @@ async def test_progress_file_matches_returned_bytes(tmp_path):
 
 @pytest.mark.asyncio
 async def test_progress_writes_are_not_quadratic(tmp_path, monkeypatch):
-    """Regression: total bytes written must be ~file size, not O(n^2)/20KB.
+    """Total bytes written equal the payload; the writer appends, not rewrites.
 
-    With the old writer, a 16KB file wrote >100KB because every 20KB boundary
-    rewrote everything accumulated so far.
+    The previous writer rewrote everything accumulated so far at every 20KB
+    boundary, so a 200KB file wrote roughly 1MB. Counting the bytes handed to
+    the progress file, rather than to a Path helper the append path never
+    calls, is what makes this able to fail.
     """
     payload = bytes(200000)
     progress = tmp_path / "big.opus"
-    written = {"n": 0}
-    real_write = Path.write_bytes
+    counts = {"bytes": 0, "calls": 0}
 
-    def counting_write(self, data):
-        written["n"] += len(data)
-        return real_write(self, data)
+    class CountingFile:
+        def __init__(self, fh):
+            self._fh = fh
 
-    monkeypatch.setattr(Path, "write_bytes", counting_write)
+        def write(self, data):
+            counts["bytes"] += len(data)
+            counts["calls"] += 1
+            return self._fh.write(data)
+
+        def __getattr__(self, name):
+            return getattr(self._fh, name)
+
+    real_open = Path.open
+
+    def counting_open(self, *args, **kwargs):
+        fh = real_open(self, *args, **kwargs)
+        mode = args[0] if args else kwargs.get("mode", "r")
+        return CountingFile(fh) if "w" in mode or "a" in mode else fh
+
+    monkeypatch.setattr(Path, "open", counting_open)
     client = _make_client(payload)
-    await client.download_file(SESSION, 0, len(payload),
-                               progress_path=str(progress))
-    # Old behaviour would be ~1MB for a 200KB file. Allow generous slack for
-    # the append path's single final write.
-    assert written["n"] <= len(payload) * 2
+    await client.download_file(SESSION, 0, len(payload), progress_path=str(progress))
+
+    assert progress.read_bytes() == payload
+    assert counts["bytes"] == len(payload)
+    assert counts["calls"] > 100
 
 
 @pytest.mark.asyncio

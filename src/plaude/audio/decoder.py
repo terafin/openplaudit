@@ -127,7 +127,7 @@ def decode_ogg_opus(raw_data: bytes) -> bytes:
 #   [0x008:4]  proto-ish header (version/flags)
 #   [0x00C:4]  header length or file flags
 #   [0x010:...] userid string + metadata
-#   [0x088:12] 12-byte nonce (ChaCha20-style), then
+#   [0x084:12] 12-byte nonce (ChaCha20-style), then
 #   [0x090:4]  payload length 0x50 (80)
 #   ... zero-padding to
 #   [0x110:...] audio region: a sequence of 320-byte blocks, each holding

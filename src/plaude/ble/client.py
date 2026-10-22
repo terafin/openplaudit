@@ -688,6 +688,7 @@ class PlaudClient:
                 if 0 <= resume < expected_offset:
                     del received[resume:]
                     expected_offset = resume
+                    flushed_to = resume
                     if progress_fh is not None:
                         try:
                             progress_fh.seek(resume)
