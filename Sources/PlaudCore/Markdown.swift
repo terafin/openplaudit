@@ -1,12 +1,5 @@
 import Foundation
 
-/// Renders a transcription as an Obsidian-friendly Markdown note.
-///
-/// Mirrors the CLI's Python renderer so notes produced on the phone and on the
-/// Mac are interchangeable: YAML frontmatter (tags / created / updated), an H1
-/// title, the opening words as a blockquote summary, then one `## H:M – H:M`
-/// section per transcribed chunk so a multi-hour recording gets a usable outline
-/// instead of one enormous paragraph.
 public enum TranscriptMarkdown {
     public static func render(_ result: Transcriber.Result, title: String,
                               created: Date = Date(), audioName: String? = nil,
@@ -58,7 +51,6 @@ public enum TranscriptMarkdown {
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
     }
 
-    /// `0:00`, `9:03`, `1:02:03`.
     public static func clock(_ seconds: Double) -> String {
         let s = max(0, Int(seconds))
         let h = s / 3600, m = (s % 3600) / 60, sec = s % 60

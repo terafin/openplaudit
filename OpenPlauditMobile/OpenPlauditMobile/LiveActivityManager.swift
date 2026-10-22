@@ -39,8 +39,6 @@ final class LiveActivityManager: ObservableObject {
     func updateElapsedTime(_ seconds: Int) {
         guard let activity else { return }
         let state = RecordingActivityAttributes.ContentState(elapsedSeconds: seconds, isRecording: true)
-        // Activity is not Sendable; hop to it on its own task like the BLE
-        // delegate bridge does.
         nonisolated(unsafe) let handle = activity
         Task { await handle.update(.init(state: state, staleDate: nil)) }
     }

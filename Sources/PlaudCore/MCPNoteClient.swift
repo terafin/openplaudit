@@ -1,17 +1,5 @@
 import Foundation
 
-/// Minimal MCP-over-HTTP client for writing notes into a vault.
-///
-/// Enough of the protocol to call a server tool: initialize (capturing the
-/// session id), send the `notifications/initialized` ack, then `tools/call`.
-/// No MCP SDK, so it works from iOS with just URLSession.
-///
-/// The gateway and tool names are parameters — this ships knowing nothing about
-/// any particular deployment.
-///
-/// Enough of the protocol to call `gateway_invoke`: initialize (capturing the
-/// session id), send the `notifications/initialized` ack, then `tools/call`.
-/// No MCP SDK needed, which keeps this usable from iOS with just URLSession.
 public struct MCPNoteClient: Sendable {
     public enum MCPError: Error, LocalizedError {
         case noSession
@@ -29,12 +17,7 @@ public struct MCPNoteClient: Sendable {
 
     public let endpoint: URL
     public let token: String
-    /// Optional `X-Agent-ID` header. Sent only when set; deployments that do
-    /// not use agent attribution should leave it empty.
     public let agentID: String?
-    /// Backend tool to call. Defaults match a gateway that exposes
-    /// `gateway_invoke`; a plain MCP server can be addressed with its own
-    /// tool name by setting these.
     public let invokeTool: String
     public let backendServer: String
     public let backendTool: String
@@ -55,12 +38,9 @@ public struct MCPNoteClient: Sendable {
         self.backendTool = backendTool
     }
 
-    /// Write `content` to `path` in the user's notes vault.
     public func writeNote(path: String, content: String) async throws {
         let sid = try await initialize()
 
-        // A gateway wraps backend tools behind an invoke call; a plain MCP
-        // server takes the tool directly.
         let arguments: [String: Any]
         if backendServer.isEmpty {
             arguments = ["path": path, "content": content]
@@ -84,8 +64,6 @@ public struct MCPNoteClient: Sendable {
             throw MCPError.rpc(String(describing: res))
         }
     }
-
-    // MARK: - Protocol
 
     private func initialize() async throws -> String {
         let (body, headers) = try await post([
@@ -137,7 +115,6 @@ public struct MCPNoteClient: Sendable {
         return (data, http.allHeaderFields)
     }
 
-    /// Responses arrive as JSON or as Server-Sent Events; handle both.
     private func decode(_ data: Data) throws -> [String: Any] {
         let text = String(data: data, encoding: .utf8) ?? ""
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {

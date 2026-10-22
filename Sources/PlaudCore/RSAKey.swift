@@ -1,12 +1,6 @@
 import Foundation
 import Security
 
-/// RSA private-key loading and PKCS#1 v1.5 decryption.
-///
-/// CryptoKit has no RSA, so this goes through Security. `SecKeyCreateWithData`
-/// wants a PKCS#1 `RSAPrivateKey` blob, while the credential file stores PEM
-/// "BEGIN PRIVATE KEY" (PKCS#8, which wraps PKCS#1 inside an OCTET STRING) — so
-/// the DER is unwrapped first.
 public struct RSAKey {
     public enum KeyError: Error, LocalizedError {
         case badPEM
@@ -28,7 +22,6 @@ public struct RSAKey {
 
     public init(pem: String) throws {
         let der = try RSAKey.der(fromPEM: pem)
-        // PKCS#8 wraps PKCS#1; SecKey wants the inner PKCS#1.
         let pkcs1 = RSAKey.pkcs1(fromPKCS8: der) ?? der
         let attrs: [CFString: Any] = [
             kSecAttrKeyType: kSecAttrKeyTypeRSA,
@@ -41,7 +34,6 @@ public struct RSAKey {
         self.key = k
     }
 
-    /// PKCS#1 v1.5 decryption.
     public func decryptPKCS1(_ ciphertext: Data) throws -> Data {
         var error: Unmanaged<CFError>?
         guard let plain = SecKeyCreateDecryptedData(
@@ -51,8 +43,6 @@ public struct RSAKey {
         }
         return plain as Data
     }
-
-    // MARK: - PEM / DER
 
     static func der(fromPEM pem: String) throws -> Data {
         let body = pem
@@ -65,7 +55,6 @@ public struct RSAKey {
         return data
     }
 
-    /// Walk a PKCS#8 PrivateKeyInfo and return the inner PKCS#1 OCTET STRING.
     static func pkcs1(fromPKCS8 der: Data) -> Data? {
         let b = [UInt8](der)
         var i = 0
@@ -88,11 +77,8 @@ public struct RSAKey {
 
         guard let outer = readTLV(), outer.tag == 0x30 else { return nil }
         i = outer.range.lowerBound
-        // version INTEGER
         guard let _ = readTLV() else { return nil }
-        // privateKeyAlgorithm SEQUENCE
         guard let _ = readTLV() else { return nil }
-        // privateKey OCTET STRING -> PKCS#1
         guard let octets = readTLV(), octets.tag == 0x04 else { return nil }
         return der.subdata(in: octets.range)
     }

@@ -15,7 +15,7 @@ struct SettingsView: View {
     @State private var isPairing: Bool = false
     @State private var pairingError: String?
     @State private var storageSize: String = "Calculating..."
-    @StateObject private var notesModel = DeviceSyncModel()
+    @EnvironmentObject private var notesModel: DeviceSyncModel
     @State private var pickingNotesFolder = false
 
     var body: some View {
@@ -45,8 +45,6 @@ struct SettingsView: View {
             }
         }
     }
-
-    // MARK: - Notes output
 
     private var notesOutputCard: some View {
         VStack(alignment: .leading, spacing: 10) {

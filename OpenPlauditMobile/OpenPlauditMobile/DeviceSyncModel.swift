@@ -1,9 +1,3 @@
-/// Direct device sync — talks to the PLAUD recorder over BLE from the phone.
-///
-/// No Mac in the loop: the phone authenticates to the device (v20 RSA
-/// pre-handshake), downloads the recording, decrypts the PLAUD.AI container,
-/// muxes the Opus frames into Ogg, and uploads that to a transcription
-/// endpoint. The server decodes Opus, so the phone needs no codec.
 
 import Foundation
 import SwiftUI
@@ -32,34 +26,21 @@ final class DeviceSyncModel: ObservableObject {
     @Published private(set) var battery: Int?
     @Published private(set) var isCharging = false
     @Published private(set) var stateBytes: [UInt8] = []
-    /// Short line under the Sync button: what the last run did, and when.
     @Published private(set) var lastResultLine: String?
     @Published private(set) var deviceName: String?
     @Published private(set) var lastTranscriptPath: URL?
     @Published var credentialsMarkdown: String = ""
     @Published var deviceAddress: String = ""
-    /// The device binding token (from the CLI's config.toml). It is NOT in the
-    /// credentials file, and an empty one makes a bound device answer
-    /// TOKEN_NOT_MATCH.
     @Published var deviceToken: String = ""
-    /// No default endpoint: whatever OpenAI-compatible service the user pays
-    /// for is theirs to enter.
     @Published var endpoint: String = ""
     @Published var apiKey: String = ""
     @Published var model: String = "whisper-1"
-    /// Surfaced in the UI: keychain writes used to fail silently, which showed
-    /// up as "I have to re-enter the token every time".
     @Published private(set) var settingsError: String?
-    /// Where notes are written. Nil means the app's own Documents folder.
     @Published private(set) var outputFolderName: String?
-    /// "folder" (a Files destination) or "mcp" (write into a vault over MCP).
     @Published var destination: String = "folder"
     @Published var mcpURL: String = ""
     @Published var mcpToken: String = ""
-    /// Optional agent attribution header; blank for plain MCP servers.
     @Published var mcpAgentID: String = ""
-    /// Backend server name when the endpoint is an MCP gateway. Blank when the
-    /// endpoint is a plain MCP server that exposes the note tool directly.
     @Published var mcpServer: String = ""
     @Published var vaultFolder: String = "Recordings"
 
@@ -90,12 +71,9 @@ final class DeviceSyncModel: ObservableObject {
         apiKey = KeychainHelper.load(key: apiKeyKey) ?? ""
     }
 
-    /// Credentials and a key are the only prerequisites. The device address is
-    /// learned by scanning — requiring it here deadlocked the screen, because
-    /// the scan button lives behind this gate.
+    // The device address is learned by scanning, so it cannot gate this.
     var isConfigured: Bool {
         guard !credentialsMarkdown.isEmpty, !apiKey.isEmpty else { return false }
-        // The token may travel inside the credentials block.
         let bundled = (try? DeviceCredentials.parse(markdown: credentialsMarkdown))?.deviceToken
         return bundled?.isEmpty == false || !deviceToken.isEmpty
     }
@@ -119,11 +97,6 @@ final class DeviceSyncModel: ObservableObject {
         }
     }
 
-    // MARK: - Output location
-
-    /// Remember a folder chosen in Settings (iCloud Drive, a vault, anything
-    /// the Files app can see). Stored as a security-scoped bookmark so the app
-    /// may write there on later launches without asking again.
     func setOutputFolder(_ url: URL) {
         do {
             let scoped = url.startAccessingSecurityScopedResource()
@@ -157,10 +130,6 @@ final class DeviceSyncModel: ObservableObject {
         return url
     }
 
-    // MARK: - Connection test
-
-    /// Write a throwaway note through the gateway so the vault path can be
-    /// verified without involving BLE. Result lands in `settingsError`/UI.
     @Published private(set) var testResult: String?
 
     func testNoteDelivery() async {
@@ -187,24 +156,16 @@ final class DeviceSyncModel: ObservableObject {
                       backendServer: mcpServer.isEmpty ? nil : mcpServer)
     }
 
-    // MARK: - Scan
-
     func scan() async {
         stage = .scanning
         devices = await BLEScanner().scan(timeout: 12)
         stage = devices.isEmpty ? .failed("No PLAUD device found — tap Record once to wake it, and make sure the PLAUD app isn't connected.") : .idle
     }
 
-    /// Sync automatically when the screen appears, if everything is configured
-    /// and a device was used before. Runs once per launch so returning to the
-    /// tab does not kick off another transfer.
     @Published var autoSyncOnOpen: Bool =
         (UserDefaults.standard.object(forKey: "plaud.autoSync") as? Bool) ?? true
     private var lastAutoSyncAt: Date?
 
-    /// Session IDs already delivered. The phone never deletes from the device,
-    /// so without this every launch re-downloads and re-transcribes everything
-    /// still sitting there.
     private var syncedIDs: Set<UInt32> = {
         Set((UserDefaults.standard.array(forKey: "plaud.syncedIDs") as? [Int] ?? []).map(UInt32.init))
     }()
@@ -214,7 +175,6 @@ final class DeviceSyncModel: ObservableObject {
         UserDefaults.standard.set(syncedIDs.map(Int.init), forKey: "plaud.syncedIDs")
     }
 
-    /// True while a transfer is running, so a resume cannot start a second one.
     var isBusy: Bool {
         switch stage {
         case .scanning, .connecting, .authenticating, .listing,
@@ -225,8 +185,6 @@ final class DeviceSyncModel: ObservableObject {
         }
     }
 
-    /// Runs on launch AND on every return to the foreground. A short cooldown
-    /// keeps app-switching from kicking off repeated transfers.
     func autoSyncIfNeeded(minInterval: TimeInterval = 60) async {
         guard autoSyncOnOpen, isConfigured, !deviceAddress.isEmpty else { return }
         guard !isBusy else { return }
@@ -241,10 +199,6 @@ final class DeviceSyncModel: ObservableObject {
         UserDefaults.standard.set(on, forKey: "plaud.autoSync")
     }
 
-    // MARK: - Sync
-
-    /// Background entry point: uses the saved address, works to a deadline and
-    /// skips recordings too large for this window (they are picked up later).
     func syncInBackground(timeBudget: TimeInterval, maxRecordingBytes: Int) async -> Bool {
         guard isConfigured, !deviceAddress.isEmpty else { return false }
         await sync(address: deviceAddress, timeBudget: timeBudget,
@@ -254,7 +208,7 @@ final class DeviceSyncModel: ObservableObject {
     }
 
     func sync(address: String, timeBudget: TimeInterval? = nil,
-              maxRecordingBytes: Int? = nil, force: Bool = false) async {
+              maxRecordingBytes: Int? = nil) async {
         deviceAddress = address
         try? KeychainHelper.save(key: addressKey, value: address)
 
@@ -295,16 +249,12 @@ final class DeviceSyncModel: ObservableObject {
             let transcriber = Transcriber(endpoint: url, apiKey: apiKey, model: model)
             var completed = 0
 
-
-            // Anything already delivered but still on the device only needs to
-            // be released — the note exists, so no re-download. Without this,
-            // ledger entries from before STOP was implemented stay forever.
             for session in sessions where syncedIDs.contains(session.sessionID) {
                 await client.releaseSession(session.sessionID)
             }
 
             for session in sessions {
-                if !force, syncedIDs.contains(session.sessionID) { continue }
+                if syncedIDs.contains(session.sessionID) { continue }
                 if let max = maxRecordingBytes, Int(session.fileSize) > max {
                     continue    // leave it for a window with more room
                 }
@@ -314,7 +264,12 @@ final class DeviceSyncModel: ObservableObject {
                 stage = .downloading(0)
                 let raw = try await client.downloadFileV20(
                     sessionID: session.sessionID,
-                    fileSize: session.fileSize
+                    fileSize: session.fileSize,
+                    progress: { done, total in
+                        Task { @MainActor in
+                            self.stage = .downloading(total > 0 ? Double(done) / Double(total) : 0)
+                        }
+                    }
                 )
 
                 stage = .decrypting
@@ -324,10 +279,10 @@ final class DeviceSyncModel: ObservableObject {
                 stage = .transcribing(0, 1)
                 let result: Transcriber.Result
                 do {
-                    result = try await transcriber.transcribe(frames: frames)
+                    result = try await transcriber.transcribe(frames: frames) { done, total in
+                        Task { @MainActor in self.stage = .transcribing(done, total) }
+                    }
                 } catch {
-                    // Keep the exact bytes we sent (and the container we
-                    // decrypted) so the failure can be inspected off-device.
                     let dbg = FileManager.default.urls(for: .documentDirectory,
                                                        in: .userDomainMask)[0]
                         .appendingPathComponent("PlaudeDebug", isDirectory: true)
@@ -365,18 +320,12 @@ final class DeviceSyncModel: ObservableObject {
         }
     }
 
-    // MARK: - Output
-
-    /// Markdown goes to the app's Documents directory, which is visible in the
-    /// Files app (and therefore reachable by Obsidian / iCloud Drive).
     private func save(markdown: String, name: String, sessionID: UInt32?) async throws -> URL? {
         if destination == "mcp" {
             guard let url = URL(string: mcpURL), !mcpToken.isEmpty else {
                 throw MCPNoteClient.MCPError.http(-1, "MCP URL or token missing")
             }
             let root = vaultFolder.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
-            // Layout: <root>/<ISO date>/<time>/<note>.md — one folder per
-            // recording so a vault full of transcripts stays browsable.
             let date = sessionID.map { Date(timeIntervalSince1970: TimeInterval($0)) } ?? Date()
             let day = Self.folderDay(date)
             let time = Self.folderTime(date)
@@ -396,7 +345,6 @@ final class DeviceSyncModel: ObservableObject {
             try markdown.write(to: url, atomically: true, encoding: .utf8)
             return url
         }
-        // Default: the app's own Documents folder (visible in Files).
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Plaud", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -412,7 +360,6 @@ final class DeviceSyncModel: ObservableObject {
         return f.string(from: Date(timeIntervalSince1970: TimeInterval(sessionID))) + "_UTC"
     }
 
-    /// `2026-10-22` — ISO date, safe on every filesystem.
     static func clockNow() -> String {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f.string(from: Date())
     }
@@ -424,7 +371,6 @@ final class DeviceSyncModel: ObservableObject {
         return f.string(from: date)
     }
 
-    /// `09-17` — colons are avoided so the folder works everywhere.
     static func folderTime(_ date: Date) -> String {
         let f = DateFormatter()
         f.dateFormat = "HH-mm"
@@ -440,9 +386,7 @@ final class DeviceSyncModel: ObservableObject {
     }
 }
 
-
 extension String {
-    /// Trimmed, or nil when effectively empty.
     var nonEmpty: String? {
         let t = trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? nil : t

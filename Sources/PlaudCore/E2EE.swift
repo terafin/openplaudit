@@ -1,16 +1,5 @@
 import Foundation
 
-/// PLAUD.AI E2EE container decryption.
-///
-/// Header (little-endian):
-///   [0x000:8]  "PLAUD.AI" magic      [0x008:2] version
-///   [0x00A:2]  headerSize (=512)     [0x00C:4] crc
-///   [0x084:12] nonce                 [0x090:4] segment (=80)
-///   [0x100:256] keyCipher (RSA)      [0x200:...] encrypted audio
-///
-/// The symmetric key is RSA-wrapped; audio is encrypted in `segment`-byte
-/// chunks, each with a FRESH ChaCha20 keystream (counter 0, header nonce) —
-/// not one continuous stream. The plaintext is raw Opus frames.
 public enum PLAUDAIContainer {
     public static let magic = Data("PLAUD.AI".utf8)
     public static let headerSize = 512
@@ -60,7 +49,6 @@ public enum PLAUDAIContainer {
         )
     }
 
-    /// Decrypt a container to raw Opus frames.
     public static func decryptToFrames(_ data: Data, privateKeyPEM: String) throws -> Data {
         let header = try parseHeader(data)
         let rsa = try RSAKey(pem: privateKeyPEM)
@@ -87,8 +75,6 @@ public enum PLAUDAIContainer {
         }
         return out
     }
-
-    // MARK: - little-endian readers
 
     static func readU16(_ d: Data, at i: Int) -> UInt16 {
         guard i + 1 < d.count else { return 0 }
