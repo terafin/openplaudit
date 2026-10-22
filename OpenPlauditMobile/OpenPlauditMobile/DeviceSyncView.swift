@@ -113,7 +113,9 @@ struct DeviceSyncView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(model.deviceName ?? "Your PLAUD")
                             .font(Theme.body)
-                        Text(model.battery.map { "\($0)% battery" } ?? "Battery unknown")
+                        Text(model.battery.map {
+                            model.isCharging ? "\($0)% · charging" : "\($0)% battery"
+                        } ?? "Battery unknown")
                             .font(Theme.caption)
                             .foregroundStyle(Theme.textTertiary)
                     }
@@ -169,6 +171,7 @@ struct DeviceSyncView: View {
     }
 
     private var batterySymbol: String {
+        if model.isCharging { return "battery.100percent.bolt" }
         guard let b = model.battery else { return "battery.0percent" }
         switch b {
         case 88...: return "battery.100percent"
@@ -180,6 +183,7 @@ struct DeviceSyncView: View {
     }
 
     private var batteryColour: Color {
+        if model.isCharging { return .green }
         guard let b = model.battery else { return Theme.textTertiary }
         return b <= 15 ? .red : (b <= 30 ? .orange : .green)
     }
@@ -225,29 +229,31 @@ struct DeviceSettingsView: View {
                 Section {
                     Picker("Destination", selection: $model.destination) {
                         Text("Files folder").tag("folder")
-                        Text("Obsidian (Midgard)").tag("midgard")
+                        Text("Vault (MCP)").tag("mcp")
                     }
                     .pickerStyle(.segmented)
                 } header: {
                     Text("Where notes go")
                 }
-                if model.destination == "midgard" {
+                if model.destination == "mcp" {
                     Section {
-                        TextField("Gateway URL", text: $model.mcpURL)
+                        TextField("MCP endpoint URL", text: $model.mcpURL)
                             .keyboardType(.URL)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
-                        SecureField("Gateway token", text: $model.mcpToken)
+                        SecureField("Token", text: $model.mcpToken)
+                        TextField("Agent ID (optional)", text: $model.mcpAgentID).autocorrectionDisabled().textInputAutocapitalization(.never)
+                        TextField("Backend server (blank for a plain MCP server)", text: $model.mcpServer, prompt: Text("e.g. obsidian")).autocorrectionDisabled().textInputAutocapitalization(.never)
                         TextField("Vault folder", text: $model.vaultFolder)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
-                        Button("Test connection") { Task { await model.testMidgard() } }
+                        Button("Test connection") { Task { await model.testNoteDelivery() } }
                         if let r = model.testResult {
                             Text(r).font(.caption)
                                 .foregroundStyle(r.hasPrefix("OK") ? .green : .orange)
                         }
                     } header: {
-                        Text("Midgard")
+                        Text("MCP")
                     } footer: {
                         Text("Writes to \(model.vaultFolder)/<date>/<time>/<note>.md via MCP — nothing is stored on the phone.")
                     }

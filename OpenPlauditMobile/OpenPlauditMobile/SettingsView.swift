@@ -52,20 +52,20 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             Picker("Destination", selection: $notesModel.destination) {
                 Text("Files folder").tag("folder")
-                Text("Obsidian (Midgard)").tag("midgard")
+                Text("Vault (MCP)").tag("mcp")
             }
             .pickerStyle(.segmented)
             .onChange(of: notesModel.destination) { _, _ in notesModel.saveSettings() }
-            if notesModel.destination == "midgard" {
-                TextField("Gateway URL", text: $notesModel.mcpURL)
+            if notesModel.destination == "mcp" {
+                TextField("MCP endpoint URL", text: $notesModel.mcpURL)
                     .keyboardType(.URL)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-                SecureField("Gateway token", text: $notesModel.mcpToken)
+                SecureField("Token", text: $notesModel.mcpToken)
                 TextField("Vault folder", text: $notesModel.vaultFolder)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-                Button("Save gateway settings") { notesModel.saveSettings() }
+                Button("Save delivery settings") { notesModel.saveSettings() }
                     .buttonStyle(.bordered)
             }
             if notesModel.destination == "folder" {

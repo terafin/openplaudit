@@ -30,6 +30,8 @@ final class DeviceSyncModel: ObservableObject {
     @Published private(set) var devices: [DiscoveredDevice] = []
     @Published private(set) var recordings: [RecordingSession] = []
     @Published private(set) var battery: Int?
+    @Published private(set) var isCharging = false
+    @Published private(set) var stateBytes: [UInt8] = []
     /// Short line under the Sync button: what the last run did, and when.
     @Published private(set) var lastResultLine: String?
     @Published private(set) var deviceName: String?
@@ -40,19 +42,26 @@ final class DeviceSyncModel: ObservableObject {
     /// credentials file, and an empty one makes a bound device answer
     /// TOKEN_NOT_MATCH.
     @Published var deviceToken: String = ""
-    @Published var endpoint: String = "https://bifrost.siliconspirit.net/v1/audio/transcriptions"
+    /// No default endpoint: whatever OpenAI-compatible service the user pays
+    /// for is theirs to enter.
+    @Published var endpoint: String = ""
     @Published var apiKey: String = ""
-    @Published var model: String = "vllm/whisper-large-v3"
+    @Published var model: String = "whisper-1"
     /// Surfaced in the UI: keychain writes used to fail silently, which showed
     /// up as "I have to re-enter the token every time".
     @Published private(set) var settingsError: String?
     /// Where notes are written. Nil means the app's own Documents folder.
     @Published private(set) var outputFolderName: String?
-    /// "folder" (Files destination) or "midgard" (Obsidian via the gateway).
+    /// "folder" (a Files destination) or "mcp" (write into a vault over MCP).
     @Published var destination: String = "folder"
-    @Published var mcpURL: String = "https://mcp.siliconspirit.net/mcp"
+    @Published var mcpURL: String = ""
     @Published var mcpToken: String = ""
-    @Published var vaultFolder: String = "Plaude"
+    /// Optional agent attribution header; blank for plain MCP servers.
+    @Published var mcpAgentID: String = ""
+    /// Backend server name when the endpoint is an MCP gateway. Blank when the
+    /// endpoint is a plain MCP server that exposes the note tool directly.
+    @Published var mcpServer: String = ""
+    @Published var vaultFolder: String = "Recordings"
 
     private let credsKey = "plaud.credentials"
     private let addressKey = "plaud.address"
@@ -75,6 +84,8 @@ final class DeviceSyncModel: ObservableObject {
         mcpURL = UserDefaults.standard.string(forKey: mcpURLKey) ?? mcpURL
         vaultFolder = UserDefaults.standard.string(forKey: vaultFolderKey) ?? vaultFolder
         mcpToken = KeychainHelper.load(key: mcpTokenKey) ?? ""
+        mcpAgentID = UserDefaults.standard.string(forKey: "plaud.mcpAgentID") ?? ""
+        mcpServer = UserDefaults.standard.string(forKey: "plaud.mcpServer") ?? mcpServer
         endpoint = KeychainHelper.load(key: endpointKey) ?? endpoint
         apiKey = KeychainHelper.load(key: apiKeyKey) ?? ""
     }
@@ -101,6 +112,8 @@ final class DeviceSyncModel: ObservableObject {
             UserDefaults.standard.set(destination, forKey: destinationKey)
             UserDefaults.standard.set(mcpURL, forKey: mcpURLKey)
             UserDefaults.standard.set(vaultFolder, forKey: vaultFolderKey)
+            UserDefaults.standard.set(mcpAgentID, forKey: "plaud.mcpAgentID")
+            UserDefaults.standard.set(mcpServer, forKey: "plaud.mcpServer")
         } catch {
             settingsError = "Could not save: \(error)"
         }
@@ -150,21 +163,28 @@ final class DeviceSyncModel: ObservableObject {
     /// verified without involving BLE. Result lands in `settingsError`/UI.
     @Published private(set) var testResult: String?
 
-    func testMidgard() async {
+    func testNoteDelivery() async {
         testResult = nil
         guard let url = URL(string: mcpURL), !mcpToken.isEmpty else {
-            testResult = "Gateway URL or token is empty"
+            testResult = "MCP URL or token is empty"
             return
         }
         let root = vaultFolder.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
-        let path = "\(root.isEmpty ? "Plaude" : root)/connection-test.md"
+        let path = "\(root.isEmpty ? "Recordings" : root)/connection-test.md"
         do {
-            try await MidgardClient(endpoint: url, token: mcpToken)
-                .writeNote(path: path, content: "# PLAUD connection test\n\nWritten by the app. Safe to delete.\n")
+            try await noteClient(url).writeNote(
+                path: path,
+                content: "# Connection test\n\nWritten by the app. Safe to delete.\n")
             testResult = "OK — wrote \(path)"
         } catch {
             testResult = error.localizedDescription
         }
+    }
+
+    private func noteClient(_ url: URL) -> MCPNoteClient {
+        MCPNoteClient(endpoint: url, token: mcpToken,
+                      agentID: mcpAgentID.isEmpty ? nil : mcpAgentID,
+                      backendServer: mcpServer.isEmpty ? nil : mcpServer)
     }
 
     // MARK: - Scan
@@ -257,7 +277,10 @@ final class DeviceSyncModel: ObservableObject {
             stage = .authenticating
             deviceName = await client.deviceName
             _ = try await client.handshake()
-            battery = await client.batteryLevel()
+            if let status = await client.batteryStatus() {
+                battery = status.level
+                isCharging = status.charging
+            }
             try await client.timeSync()
 
             stage = .listing
@@ -347,9 +370,9 @@ final class DeviceSyncModel: ObservableObject {
     /// Markdown goes to the app's Documents directory, which is visible in the
     /// Files app (and therefore reachable by Obsidian / iCloud Drive).
     private func save(markdown: String, name: String, sessionID: UInt32?) async throws -> URL? {
-        if destination == "midgard" {
+        if destination == "mcp" {
             guard let url = URL(string: mcpURL), !mcpToken.isEmpty else {
-                throw MidgardClient.MidgardError.http(-1, "Midgard URL or token missing")
+                throw MCPNoteClient.MCPError.http(-1, "MCP URL or token missing")
             }
             let root = vaultFolder.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
             // Layout: <root>/<ISO date>/<time>/<note>.md — one folder per
@@ -359,8 +382,7 @@ final class DeviceSyncModel: ObservableObject {
             let time = Self.folderTime(date)
             let path = root.isEmpty ? "\(day)/\(time)/\(name).md"
                                     : "\(root)/\(day)/\(time)/\(name).md"
-            try await MidgardClient(endpoint: url, token: mcpToken)
-                .writeNote(path: path, content: markdown)
+            try await noteClient(url).writeNote(path: path, content: markdown)
             return nil
         }
         return try saveToDisk(markdown: markdown, name: name)

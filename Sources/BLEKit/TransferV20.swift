@@ -58,6 +58,19 @@ public struct V20Assembler: Sendable {
 }
 
 extension PlaudClient {
+    /// Raw GET_STATE payload. payload[0] is documented as 1=idle, 3=recording;
+    /// the remaining bytes are undocumented. Captured so charging can be
+    /// identified by comparing readings with the charger in and out.
+    public func deviceState() async -> Data? {
+        do {
+            try await send(cmdGetState)
+            guard let r = await waitResponse(cmdGetState, timeout: 5.0), r.count > 3 else {
+                return nil
+            }
+            return r.subdata(in: 3..<r.count)
+        } catch { return nil }
+    }
+
     /// Tell the device a recording is safely on our side.
     ///
     /// Verified: sending this alone drops the session from the device's list
@@ -70,19 +83,24 @@ extension PlaudClient {
         try? await send(cmdSyncFileStop, payload: payload)
     }
 
-    /// Battery percentage (cmd 9 BATT_STATUS).
+    /// Battery level and charging state (cmd 9 BATT_STATUS).
     ///
-    /// Response payload is `[status, level]` — verified on hardware: `01 3a`
-    /// reads back 58%. Values outside 0-100 are rejected rather than shown.
-    public func batteryLevel() async -> Int? {
+    /// Payload is `[charging:1][level:1]` — established by reading the device
+    /// on and off the charger: `[0, 62]` unplugged, `[1, 62]` plugged in. The
+    /// level is a percentage; anything above 100 is rejected rather than shown.
+    public func batteryStatus() async -> (level: Int, charging: Bool)? {
         do {
             try await send(cmdBattStatus)
             guard let resp = await waitResponse(cmdBattStatus, timeout: 6.0),
-                  let level = resp.last, level <= 100 else { return nil }
-            return Int(level)
+                  resp.count >= 2, resp[1] <= 100 else { return nil }
+            return (level: Int(resp[1]), charging: resp[0] != 0)
         } catch {
             return nil
         }
+    }
+
+    public func batteryLevel() async -> Int? {
+        await batteryStatus()?.level
     }
 
     /// Download a v20 recording. Returns the raw file bytes (the PLAUD.AI

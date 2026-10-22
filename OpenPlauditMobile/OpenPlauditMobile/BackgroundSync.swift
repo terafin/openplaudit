@@ -9,11 +9,11 @@ import Foundation
 import BackgroundTasks
 import os
 
-private let log = Logger(subsystem: "com.terafin.openplaudit", category: "background")
+private let log = Logger(subsystem: "com.openplaudit.mobile", category: "background")
 
 enum BackgroundSync {
-    static let refreshID = "com.terafin.openplaudit.refresh"
-    static let processingID = "com.terafin.openplaudit.processing"
+    static let refreshID = "com.openplaudit.mobile.refresh"
+    static let processingID = "com.openplaudit.mobile.processing"
 
     /// Register handlers. Must run before the app finishes launching.
     static func register() {
