@@ -46,8 +46,6 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Notes output
-
     private var notesOutputCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Picker("Destination", selection: $notesModel.destination) {

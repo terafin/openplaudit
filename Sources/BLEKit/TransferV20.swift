@@ -3,17 +3,6 @@ import os
 
 private let log = Logger(subsystem: "com.openplaudit.app", category: "transfer")
 
-/// portVersion-20 file download.
-///
-/// The legacy `downloadFile` parses 89-byte voice records (9-byte header + one
-/// 80-byte Opus frame). A v20 device instead streams 0x02 frames of
-/// `[type:1][session:4][offset:4][chunk_len:1][data]`, where `data` is a slice
-/// of the file — for E2EE recordings that is raw PLAUD.AI container bytes, not
-/// frames. Feeding those to the 89-byte path produced "Data not 89-byte
-/// aligned".
-///
-/// Offsets are authoritative, so the assembler only appends in order and asks
-/// the device to resend from the missing offset when a notification is dropped.
 public struct V20Assembler: Sendable {
     public private(set) var bytes: [UInt8] = []
     public private(set) var expected: Int = 0
@@ -29,7 +18,6 @@ public struct V20Assembler: Sendable {
         bytes.reserveCapacity(fileSize)
     }
 
-    /// Consume one decrypted notification frame.
     public mutating func consume(_ frame: Data) {
         guard frame.count >= 10, frame[0] == 0x02 else { return }
         let sid = UInt32(frame[1]) | (UInt32(frame[2]) << 8)
@@ -58,9 +46,6 @@ public struct V20Assembler: Sendable {
 }
 
 extension PlaudClient {
-    /// Raw GET_STATE payload. payload[0] is documented as 1=idle, 3=recording;
-    /// the remaining bytes are undocumented. Captured so charging can be
-    /// identified by comparing readings with the charger in and out.
     public func deviceState() async -> Data? {
         do {
             try await send(cmdGetState)
@@ -71,11 +56,7 @@ extension PlaudClient {
         } catch { return nil }
     }
 
-    /// Tell the device a recording is safely on our side.
-    ///
-    /// Verified: sending this alone drops the session from the device's list
-    /// (6 -> 5) without a transfer. It is how a recording is freed, since there
-    /// is no BLE delete command.
+    // There is no BLE delete command; STOP is the only release mechanism.
     public func releaseSession(_ sessionID: UInt32) async {
         var payload = Data()
         var sid = sessionID.littleEndian
@@ -83,11 +64,6 @@ extension PlaudClient {
         try? await send(cmdSyncFileStop, payload: payload)
     }
 
-    /// Battery level and charging state (cmd 9 BATT_STATUS).
-    ///
-    /// Payload is `[charging:1][level:1]` — established by reading the device
-    /// on and off the charger: `[0, 62]` unplugged, `[1, 62]` plugged in. The
-    /// level is a percentage; anything above 100 is rejected rather than shown.
     public func batteryStatus() async -> (level: Int, charging: Bool)? {
         do {
             try await send(cmdBattStatus)
@@ -103,8 +79,6 @@ extension PlaudClient {
         await batteryStatus()?.level
     }
 
-    /// Download a v20 recording. Returns the raw file bytes (the PLAUD.AI
-    /// container for E2EE recordings) exactly as the device reports them.
     public func downloadFileV20(
         sessionID: UInt32,
         fileSize: UInt32,
@@ -130,8 +104,6 @@ extension PlaudClient {
             guard let head = await waitResponse(cmdSyncFileStart, timeout: 10.0) else {
                 throw DownloadError("No response to SYNC_FILE_HEAD")
             }
-            // Payload is [session_id:4][status:1] — the status is the FIFTH
-            // byte. Reading index 3 reports the session id's high byte instead.
             if head.count >= 5, head[4] != 0 {
                 throw DownloadError("Device rejected the transfer (status \(head[4]))")
             }
@@ -176,10 +148,7 @@ extension PlaudClient {
                 "Transfer incomplete: \(final.expected)/\(fileSize) bytes")
         }
 
-        // Close the transfer. This is what makes the device mark the recording
-        // as transferred and free its space — verified on hardware: sending it
-        // dropped the session count from 7 to 6. There is no BLE delete
-        // command; STOP is the only mechanism.
+        // SYNC_FILE_STOP dropped the device session count from 7 to 6.
         var stop = Data()
         var sid = sessionID.littleEndian
         stop.append(Data(bytes: &sid, count: 4))

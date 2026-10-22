@@ -1,10 +1,5 @@
 import Foundation
 
-/// Raw ChaCha20 (RFC 7539) — 32-byte key, 96-bit nonce, 32-bit block counter.
-///
-/// CryptoKit exposes ChaCha20-Poly1305 but not the bare stream cipher, and the
-/// PLAUD.AI container needs the bare stream: each 80-byte segment is decrypted
-/// with its own keystream starting at counter 0, so AEAD is the wrong tool.
 public struct ChaCha20 {
     private let key: [UInt32]
     private let nonce: [UInt32]
@@ -16,7 +11,6 @@ public struct ChaCha20 {
         self.nonce = ChaCha20.words(nonce)
     }
 
-    /// XOR `data` with the keystream beginning at `counter`.
     public func apply(_ data: Data, counter: UInt32 = 0) -> Data {
         var out = Data(count: data.count)
         let bytes = [UInt8](data)
@@ -40,8 +34,6 @@ public struct ChaCha20 {
         }
         return out
     }
-
-    // MARK: - Core
 
     private static func words(_ data: Data) -> [UInt32] {
         let b = [UInt8](data)

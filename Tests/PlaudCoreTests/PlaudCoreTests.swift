@@ -26,16 +26,12 @@ struct ChaCha20Tests {
 struct OggTests {
     @Test("produces OggS pages and a sane duration")
     func structure() {
-        // A valid one-frame Opus packet: TOC with frame-count code 0, then
-        // payload. 0x11 would advertise two equal frames with an odd payload,
-        // which the muxer now (correctly) rejects.
         var frames = Data()
         for _ in 0..<100 { frames.append(0x00); frames.append(Data(repeating: 0x11, count: 79)) }
         let ogg = OggOpus.mux(frames: frames)
         let bytes = [UInt8](ogg)
         #expect(bytes[0..<4] == [0x4f, 0x67, 0x67, 0x53])      // "OggS"
         #expect(ogg.count > frames.count)
-        // First page is BOS, carries OpusHead.
         #expect(bytes[5] & 0x02 == 0x02)
         #expect(ogg.range(of: Data("OpusHead".utf8)) != nil)
         #expect(ogg.range(of: Data("OpusTags".utf8)) != nil)
@@ -53,8 +49,6 @@ struct OggTests {
 
     @Test("CRC matches the Ogg polynomial for an empty page body")
     func crcKnown() {
-        // CRC of "OggS" under poly 0x04C11DB7, init 0 = 0x3B6E9E4F is not a
-        // published vector; assert determinism + non-zero instead.
         let a = OggOpus.crc32(Data("OggS".utf8))
         let b = OggOpus.crc32(Data("OggS".utf8))
         #expect(a == b)

@@ -1,13 +1,5 @@
 import Foundation
 
-/// Uploads Ogg/Opus audio to an OpenAI-compatible transcription endpoint and
-/// stitches the result, with Whisper's repetition loops handled client-side.
-///
-/// Why the retry ladder: vLLM runs the decoder at temperature 0.0 (pure greedy,
-/// single pass) and does not expose OpenAI's `condition_on_previous_text` /
-/// `compression_ratio_threshold` fallbacks, so a degenerate window is never
-/// rescued. Measured on real audio, one chunk came back 25% loops at 0.0 and 0%
-/// at 0.2 with `repetition_penalty` 1.1.
 public struct Transcriber {
     public struct Chunk: Sendable {
         public let index: Int
@@ -24,12 +16,9 @@ public struct Transcriber {
         public let chunksTranscribed: Int
     }
 
-    /// Retry temperatures, tried in order only when a loop is detected.
     public static let retryLadder: [Double] = [0.2, 0.4, 0.6, 0.8]
     public static let loopRepetitionPenalty = 1.1
-    /// Endpoints reject long audio; vLLM defaults to a 600 s cap.
     public static let defaultChunkSeconds: Double = 540
-    /// 20 ms Opus frames.
     public static let frameSeconds: Double = 0.02
 
     private static let loopRegex: NSRegularExpression? = try? NSRegularExpression(
@@ -52,9 +41,6 @@ public struct Transcriber {
         self.session = session
     }
 
-    // MARK: - Loop detection
-
-    /// Characters trapped in a repetition loop (same phrase >= 13 times).
     public static func loopChars(_ text: String) -> Int {
         guard let regex = loopRegex else { return 0 }
         let ns = text as NSString
@@ -67,12 +53,6 @@ public struct Transcriber {
         return Double(loopChars(text)) / Double(text.utf16.count)
     }
 
-    // MARK: - Public API
-
-    /// Transcribe raw Opus frames (as produced by `PLAUDAIContainer`).
-    ///
-    /// Frames are split into at most `chunkSeconds` of audio each, muxed to
-    /// Ogg/Opus, and uploaded. A clean chunk costs exactly one request.
     public func transcribe(frames: Data, frameSize: Int = 80,
                            progress: (@Sendable (Int, Int) -> Void)? = nil) async throws -> Result {
         let framesPerChunk = max(1, Int(chunkSeconds / Transcriber.frameSeconds))
@@ -105,7 +85,6 @@ public struct Transcriber {
                       chunksTranscribed: chunks.count)
     }
 
-    /// One chunk, retried up the temperature ladder only if a loop is detected.
     public func uploadWithRetry(_ audio: Data) async throws -> String {
         let first = try await upload(audio, extra: [])
         guard Transcriber.loopRatio(first) > 0 else { return first }
@@ -123,8 +102,6 @@ public struct Transcriber {
         }
         return best
     }
-
-    // MARK: - Transport
 
     public func upload(_ audio: Data, extra: [(String, String)]) async throws -> String {
         let boundary = "----plaude"

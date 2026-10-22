@@ -1,5 +1,3 @@
-/// OpenPlaudit Mobile — records with the iPhone microphone and syncs the PLAUD
-/// recorder directly, transcribing on-device or through a configured endpoint.
 
 import SwiftUI
 import SwiftData
@@ -37,8 +35,6 @@ struct OpenPlauditMobileApp: App {
 
 /// Root content view with tab navigation.
 struct ContentView: View {
-    /// Persisted so the app reopens where you left it. Defaults to Device,
-    /// which is the tab this app is actually used from.
     @AppStorage("selectedTab") private var selectedTab: Int = 2
 
     var body: some View {

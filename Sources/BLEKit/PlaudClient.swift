@@ -56,17 +56,11 @@ public enum BLEError: Error, LocalizedError {
 public actor PlaudClient {
     private let address: String
     private let token: String
-    /// v20 binding credentials. When present the client runs the RSA
-    /// pre-handshake and encrypts every subsequent frame; when nil it falls
-    /// back to the legacy plaintext handshake (demo/unbound devices).
     private let credentials: DeviceCredentials?
     private var sessionCrypto: SessionCrypto?
     public private(set) var portVersion: UInt8 = 0
     public private(set) var ssn: String?
 
-    // Pre-handshake frames are unencrypted and have the opcode in bytes 0-1,
-    // so they cannot share the command-response path.
-    // v20 file assembly (see TransferV20.swift).
     private var assembler: V20Assembler?
 
     private var preHandshakeFrames: [Data] = []
@@ -132,14 +126,10 @@ public actor PlaudClient {
         return resp[0] == 0
     }
 
-    /// v20 authentication: RSA pre-handshake, then a ChaCha20-Poly1305 session.
     ///
-    /// A bound portVersion-20 device rejects the plaintext handshake with
-    /// TOKEN_NOT_MATCH, so this path is what makes a real device work at all.
     private func v20Handshake(_ creds: DeviceCredentials) async throws -> Bool {
         preHandshakeFrames.removeAll()
 
-        // 1. SN signature (0xFE20), chunked.
         for chunk in V20Auth.chunks(cmd: V20Auth.cmdPreHandshakeNew,
                                     data: creds.snSignature) {
             try await sendRaw(chunk)
@@ -148,20 +138,17 @@ public actor PlaudClient {
             throw V20Auth.AuthError.noConfirm
         }
 
-        // 2. Our RSA public key (0xFE12), PEM bytes chunked.
         for chunk in V20Auth.chunks(cmd: V20Auth.cmdSendRSAPubKey,
                                     data: Data(creds.rsaPublicKeyPEM.utf8)) {
             try await sendRaw(chunk)
         }
 
-        // 3. Collect the device's key material until the announced count is met.
         let frames = await collectKeyMaterial(timeout: 15)
         let keys = try V20Auth.sessionKeys(fromChunks: frames,
                                            privateKeyPEM: creds.rsaPrivateKeyPEM)
         let crypto = SessionCrypto(keys: keys)
         sessionCrypto = crypto
 
-        // 4. Encrypted handshake.
         let payload = V20Auth.handshakePayload(token: token, portVersion: 20)
         let packet = try crypto.encrypt(V20Auth.buildCmd(cmdHandshake, payload: payload))
         try await sendRaw(packet)
@@ -176,7 +163,6 @@ public actor PlaudClient {
             portVersion = resp[2]
         }
 
-        // 5. Two-handshake: the device pushes its SSN and expects it echoed back.
         if portVersion >= 20, let ssnFrame = await waitResponse(2, timeout: 5.0),
            ssnFrame.count > 3 {
             let bytes = ssnFrame.dropFirst(3).prefix { $0 != 0 }
@@ -191,8 +177,6 @@ public actor PlaudClient {
         return true
     }
 
-    // MARK: - Pre-handshake plumbing
-
     private func waitPreHandshake(_ cmd: UInt16, timeout: TimeInterval) async -> Data? {
         await withCheckedContinuation { continuation in
             preHandshakeWaiters[cmd] = continuation
@@ -205,7 +189,6 @@ public actor PlaudClient {
         }
     }
 
-    /// Wait until the device has sent every announced 0xFE12 chunk.
     private func collectKeyMaterial(timeout: TimeInterval) async -> [Data] {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -221,11 +204,6 @@ public actor PlaudClient {
         }
         return preHandshakeFrames
     }
-
-    /// Everything that arrives from the device lands here, so decryption can be
-    /// applied to the WHOLE frame before it is parsed — the sealed blob covers
-    /// the proto and command bytes too.
-    // MARK: - v20 file assembly
 
     func beginAssembly(_ a: V20Assembler) { assembler = a }
     func endAssembly() { assembler = nil }
@@ -243,7 +221,6 @@ public actor PlaudClient {
         }
         guard !frame.isEmpty else { return }
 
-        // Pre-handshake replies: opcode in bytes 0-1, no proto byte, unencrypted.
         if sessionCrypto == nil, frame.count >= 2 {
             let opcode = UInt16(frame[0]) | (UInt16(frame[1]) << 8)
             if opcode == V20Auth.cmdPreHandshakeConfirm || opcode == V20Auth.cmdSendRSAPubKey {
@@ -257,9 +234,6 @@ public actor PlaudClient {
         }
 
         if frame[0] == protoVoice {
-            // During a v20 download the whole frame is handed to the assembler:
-            // it carries session + offset, and its payload is a slice of the
-            // FILE, not a single Opus frame.
             if assembler != nil {
                 assembler?.consume(frame)
             } else {
@@ -307,8 +281,6 @@ public actor PlaudClient {
         p.writeValue(pkt, for: rx, type: .withResponse)
     }
 
-    /// Write bytes verbatim — used for the pre-handshake, which precedes the
-    /// session cipher and must never be encrypted.
     func sendRaw(_ data: Data) async throws {
         guard let rx = rxCharacteristic, let p = peripheral else {
             throw BLEError.notConnected
@@ -517,8 +489,6 @@ private final class ClientDelegate: NSObject, CBCentralManagerDelegate, CBPeriph
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let data = characteristic.value, !data.isEmpty else { return }
-        // Decryption has to happen in the actor, because an encrypted frame
-        // seals the proto/command bytes as well as the payload.
         Task { await actor?.handleNotification(Data(data)) }
     }
 }

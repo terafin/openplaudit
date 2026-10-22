@@ -1,20 +1,12 @@
 import Foundation
 import CryptoKit
 
-/// v20 authentication: the RSA pre-handshake and the ChaCha20-Poly1305 session
-/// cipher used for every command after it.
-///
-/// `BLEKit` only implements the legacy plaintext handshake (token in the clear,
-/// no pre-handshake), which a bound portVersion-20 device rejects with
-/// TOKEN_NOT_MATCH. This is the missing half — pure logic, no BLE, so it can be
-/// unit-tested off-device and driven from the iOS app's CoreBluetooth layer.
 public enum V20Auth {
     public static let cmdPreHandshakeNew: UInt16 = 0xFE20
     public static let cmdPreHandshakeConfirm: UInt16 = 0xFE11
     public static let cmdSendRSAPubKey: UInt16 = 0xFE12
     public static let cmdHandshake: UInt16 = 0x01
     public static let chunkSize = 100
-    /// Two bytes the device expects ahead of the port version in a handshake.
     public static let mtuIndicator = Data([0x02, 0x00])
 
     public enum AuthError: Error, LocalizedError {
@@ -39,10 +31,6 @@ public enum V20Auth {
         }
     }
 
-    // MARK: - Packet builders
-
-    /// `[cmd:2LE][total:1][index:1][data]` — sent unencrypted, before the
-    /// session cipher exists.
     public static func preHandshakeChunk(cmd: UInt16, total: Int, index: Int,
                                          data: Data) -> Data {
         var out = Data()
@@ -52,7 +40,6 @@ public enum V20Auth {
         return out
     }
 
-    /// `[proto:1][cmd:2LE][payload]`.
     public static func buildCmd(_ cmd: UInt16, payload: Data = Data()) -> Data {
         var out = Data([0x01, UInt8(cmd & 0xff), UInt8((cmd >> 8) & 0xff)])
         out.append(payload)
@@ -74,7 +61,6 @@ public enum V20Auth {
         return p
     }
 
-    /// Split `data` into the chunked pre-handshake frames for `cmd`.
     public static func chunks(cmd: UInt16, data: Data, chunkSize: Int = chunkSize) -> [Data] {
         let total = max(1, (data.count + chunkSize - 1) / chunkSize)
         var out: [Data] = []
@@ -88,18 +74,12 @@ public enum V20Auth {
         return out
     }
 
-    // MARK: - Session keys
-
     public struct SessionKeys {
         public let key: Data       // 32 bytes
         public let nonce: Data     // 12 bytes
         public let ad: Data        // 12 bytes
     }
 
-    /// Reassemble the device's 0xFE12 chunks and unwrap the session keys.
-    ///
-    /// Each frame is `[cmd:2][total:1][index:1][data]`; the concatenated payload
-    /// is one RSA blob of `key(32) | nonce(12) | ad(12) | sealed verification`.
     public static func sessionKeys(fromChunks frames: [Data],
                                    privateKeyPEM: String) throws -> SessionKeys {
         var expected: Int?
@@ -128,8 +108,6 @@ public enum V20Auth {
             nonce: dec.subdata(in: 32..<44),
             ad: dec.subdata(in: 44..<56)
         )
-        // The remainder is a sealed "PLAUD.AI" blob under the same keys — a
-        // cheap proof that the unwrap succeeded.
         let sealedBlob = dec.subdata(in: 56..<dec.count)
         if sealedBlob.count > 16 {
             let ct = sealedBlob.subdata(in: 0..<(sealedBlob.count - 16))
@@ -144,12 +122,7 @@ public enum V20Auth {
     }
 }
 
-/// ChaCha20-Poly1305 session cipher, matching the device's counter scheme.
-///
-/// The nonce is FIXED for the whole session (that is the protocol); the 4-byte
-/// little-endian counter is prepended to the plaintext inside the sealed blob.
-/// `sendCounter` starts at 1 and is incremented BEFORE each encryption, so the
-/// first packet goes out with counter 2.
+// Nonce is fixed for the session; counter increments before encrypting, so the first packet uses 2.
 public final class SessionCrypto {
     public private(set) var sendCounter: UInt32 = 1
     public private(set) var receiveCounter: UInt32 = 0
@@ -192,13 +165,10 @@ public final class SessionCrypto {
     }
 }
 
-/// Device binding credentials, parsed from the same markdown file the CLI uses.
 public struct DeviceCredentials: Sendable {
     public let snSignature: Data
     public let rsaPublicKeyPEM: String
     public let rsaPrivateKeyPEM: String
-    /// Optional: the device binding token. When present the app does not need a
-    /// separate field, which removes a hand-pasted 32-char hex from the setup.
     public let deviceToken: String?
 
     public enum ParseError: Error, LocalizedError {
@@ -220,10 +190,6 @@ public struct DeviceCredentials: Sendable {
         self.rsaPrivateKeyPEM = rsaPrivateKeyPEM
     }
 
-    /// Parse the `plaud-credentials.md` format:
-    ///   - sn_signature: <base64>
-    ///   - user_rsa_public_key: -----BEGIN PUBLIC KEY-----...
-    ///   - user_rsa_private_key: -----BEGIN PRIVATE KEY-----...
     public static func parse(markdown: String) throws -> DeviceCredentials {
         func field(_ name: String) throws -> String {
             let pattern = "\(name):\\s*(\\S+)"

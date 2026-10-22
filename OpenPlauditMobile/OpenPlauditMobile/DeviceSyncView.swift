@@ -1,7 +1,3 @@
-/// Direct-from-device sync screen.
-///
-/// Lets the phone pull recordings straight off the PLAUD recorder and produce
-/// Markdown notes, with no Mac involved.
 
 import SwiftUI
 import BLEKit
@@ -105,7 +101,6 @@ struct DeviceSyncView: View {
     @ViewBuilder private var deviceSection: some View {
         Section {
             if let address = model.deviceAddress.nonEmpty, !showScanner {
-                // Focused mode: one recorder, the one already paired.
                 HStack(spacing: 14) {
                     Image(systemName: batterySymbol)
                         .font(.title2)

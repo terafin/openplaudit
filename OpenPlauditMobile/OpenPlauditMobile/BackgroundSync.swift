@@ -1,9 +1,3 @@
-/// Periodic background sync.
-///
-/// iOS will not let a bulk BLE transfer run indefinitely in the background, but
-/// it does hand out short execution windows — ~30 s for a refresh, minutes for
-/// a processing task. That is enough for short recordings, which is the common
-/// case; long ones simply wait for the next window or for the app to be opened.
 
 import Foundation
 import BackgroundTasks
@@ -15,7 +9,6 @@ enum BackgroundSync {
     static let refreshID = "com.openplaudit.mobile.refresh"
     static let processingID = "com.openplaudit.mobile.processing"
 
-    /// Register handlers. Must run before the app finishes launching.
     static func register() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: refreshID,
                                         using: nil) { task in
@@ -27,7 +20,6 @@ enum BackgroundSync {
         }
     }
 
-    /// Ask iOS for another run. Called after each sync and on backgrounding.
     static func schedule() {
         let refresh = BGAppRefreshTaskRequest(identifier: refreshID)
         refresh.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
@@ -45,8 +37,6 @@ enum BackgroundSync {
     private static func handle(_ task: BGTask, budget: TimeInterval,
                                maxBytes: Int) {
         schedule()
-        // BGTask is not Sendable; the same escape hatch the BLE delegate bridge
-        // uses. Completion must be reported exactly once.
         nonisolated(unsafe) let bgTask = task
         let work = Task { @MainActor in
             let model = DeviceSyncModel()

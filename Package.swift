@@ -37,9 +37,6 @@ let package = Package(
             exclude: ["Package.swift"]
         ),
 
-        // --- Cross-platform (macOS + iOS) ---
-        // PLAUD.AI container decryption, Ogg/Opus muxing and transcription, with
-        // no platform-specific dependencies (no libopus, no whisper).
         .target(
             name: "PlaudCore",
             path: "Sources/PlaudCore",
