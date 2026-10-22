@@ -38,9 +38,8 @@ final class DeviceSyncModel: ObservableObject {
     @Published private(set) var lastTranscriptPath: URL?
     @Published var credentialsMarkdown: String = ""
     @Published var deviceAddress: String = ""
-    /// The device binding token (from the CLI's config.toml). It is NOT in the
-    /// credentials file, and an empty one makes a bound device answer
-    /// TOKEN_NOT_MATCH.
+    /// Device binding token. Read from `device_token` in the credentials block
+    /// when present; an empty token makes a bound device answer TOKEN_NOT_MATCH.
     @Published var deviceToken: String = ""
     /// No default endpoint: whatever OpenAI-compatible service the user pays
     /// for is theirs to enter.

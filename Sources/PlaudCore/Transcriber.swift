@@ -32,7 +32,7 @@ public struct Transcriber {
     /// 20 ms Opus frames.
     public static let frameSeconds: Double = 0.02
 
-    private static let loopRegex = try! NSRegularExpression(
+    private static let loopRegex: NSRegularExpression? = try? NSRegularExpression(
         pattern: "((?:\\b[\\w']+\\b[ ,.]*){1,4}?)(?:\\1){12,}",
         options: [.caseInsensitive])
 
@@ -56,8 +56,9 @@ public struct Transcriber {
 
     /// Characters trapped in a repetition loop (same phrase >= 13 times).
     public static func loopChars(_ text: String) -> Int {
+        guard let regex = loopRegex else { return 0 }
         let ns = text as NSString
-        return loopRegex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        return regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
             .reduce(0) { $0 + $1.range.length }
     }
 
