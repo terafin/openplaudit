@@ -106,6 +106,7 @@ public enum V20Auth {
         var parts: [Int: Data] = [:]
         for f in frames {
             guard f.count >= 4 else { continue }
+            guard UInt16(f[0]) | (UInt16(f[1]) << 8) == cmdSendRSAPubKey else { continue }
             let total = Int(f[2]), index = Int(f[3])
             if expected == nil { expected = total }
             guard total == expected else { continue }

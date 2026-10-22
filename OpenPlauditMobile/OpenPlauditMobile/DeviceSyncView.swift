@@ -7,7 +7,7 @@ import SwiftUI
 import BLEKit
 
 struct DeviceSyncView: View {
-    @StateObject private var model = DeviceSyncModel()
+    @EnvironmentObject private var model: DeviceSyncModel
     @State private var showSettings = false
     @State private var showScanner = false
     @Environment(\.scenePhase) private var scenePhase

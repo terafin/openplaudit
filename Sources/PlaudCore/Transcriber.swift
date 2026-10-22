@@ -74,7 +74,7 @@ public struct Transcriber {
     /// Frames are split into at most `chunkSeconds` of audio each, muxed to
     /// Ogg/Opus, and uploaded. A clean chunk costs exactly one request.
     public func transcribe(frames: Data, frameSize: Int = 80,
-                           progress: ((Int, Int) -> Void)? = nil) async throws -> Result {
+                           progress: (@Sendable (Int, Int) -> Void)? = nil) async throws -> Result {
         let framesPerChunk = max(1, Int(chunkSeconds / Transcriber.frameSeconds))
         let bytesPerChunk = framesPerChunk * frameSize
         let totalFrames = frames.count / frameSize

@@ -1,18 +1,19 @@
-/// OpenPlaudit Mobile — iPhone companion recorder app.
-///
-/// Lightweight recorder that syncs to the macOS app for AI processing.
-/// No local transcription — the Mac handles the full pipeline.
+/// OpenPlaudit Mobile — records with the iPhone microphone and syncs the PLAUD
+/// recorder directly, transcribing on-device or through a configured endpoint.
 
 import SwiftUI
 import SwiftData
 
-/// Register background sync before launch finishes, per BackgroundTasks rules.
-private let backgroundRegistration: Void = {
-    BackgroundSync.register()
-}()
-
 @main
 struct OpenPlauditMobileApp: App {
+    /// One model for every tab: settings changed in one place apply everywhere.
+    @StateObject private var syncModel = DeviceSyncModel()
+
+    init() {
+        // BGTaskScheduler requires handlers registered before launch completes.
+        BackgroundSync.register()
+    }
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([RecordingModel.self])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
@@ -27,10 +28,8 @@ struct OpenPlauditMobileApp: App {
         WindowGroup {
             ContentView()
                 .preferredColorScheme(.dark)
-                .onAppear {
-                    _ = backgroundRegistration
-                    BackgroundSync.schedule()
-                }
+                .environmentObject(syncModel)
+                .onAppear { BackgroundSync.schedule() }
         }
         .modelContainer(sharedModelContainer)
     }

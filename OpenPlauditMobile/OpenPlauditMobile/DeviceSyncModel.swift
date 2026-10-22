@@ -253,7 +253,7 @@ final class DeviceSyncModel: ObservableObject {
     }
 
     func sync(address: String, timeBudget: TimeInterval? = nil,
-              maxRecordingBytes: Int? = nil, force: Bool = false) async {
+              maxRecordingBytes: Int? = nil) async {
         deviceAddress = address
         try? KeychainHelper.save(key: addressKey, value: address)
 
@@ -303,7 +303,7 @@ final class DeviceSyncModel: ObservableObject {
             }
 
             for session in sessions {
-                if !force, syncedIDs.contains(session.sessionID) { continue }
+                if syncedIDs.contains(session.sessionID) { continue }
                 if let max = maxRecordingBytes, Int(session.fileSize) > max {
                     continue    // leave it for a window with more room
                 }
@@ -313,7 +313,12 @@ final class DeviceSyncModel: ObservableObject {
                 stage = .downloading(0)
                 let raw = try await client.downloadFileV20(
                     sessionID: session.sessionID,
-                    fileSize: session.fileSize
+                    fileSize: session.fileSize,
+                    progress: { done, total in
+                        Task { @MainActor in
+                            self.stage = .downloading(total > 0 ? Double(done) / Double(total) : 0)
+                        }
+                    }
                 )
 
                 stage = .decrypting
@@ -323,7 +328,9 @@ final class DeviceSyncModel: ObservableObject {
                 stage = .transcribing(0, 1)
                 let result: Transcriber.Result
                 do {
-                    result = try await transcriber.transcribe(frames: frames)
+                    result = try await transcriber.transcribe(frames: frames) { done, total in
+                        Task { @MainActor in self.stage = .transcribing(done, total) }
+                    }
                 } catch {
                     // Keep the exact bytes we sent (and the container we
                     // decrypted) so the failure can be inspected off-device.
