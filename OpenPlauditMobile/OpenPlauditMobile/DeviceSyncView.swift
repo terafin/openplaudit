@@ -9,6 +9,7 @@ import BLEKit
 struct DeviceSyncView: View {
     @StateObject private var model = DeviceSyncModel()
     @State private var showSettings = false
+    @State private var showScanner = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -35,8 +36,11 @@ struct DeviceSyncView: View {
                         Toggle("Sync when I open the app", isOn: Binding(
                             get: { model.autoSyncOnOpen },
                             set: { model.setAutoSync($0) }))
+                        Toggle("Remove from recorder after sync", isOn: Binding(
+                            get: { model.removeAfterSync },
+                            set: { model.setRemoveAfterSync($0) }))
                     } footer: {
-                        Text("iOS suspends Bluetooth apps in the background, so a transfer has to run with the app open. Auto-sync starts it for you.")
+                        Text("iOS suspends Bluetooth apps in the background, so a transfer has to run with the app open. Recordings are only removed once their note has been delivered.")
                     }
                     deviceSection
                     if !model.recordings.isEmpty { recordingsSection }
@@ -102,25 +106,71 @@ struct DeviceSyncView: View {
     }
 
     @ViewBuilder private var deviceSection: some View {
-        Section("Device") {
-            if model.devices.isEmpty {
-                Button("Scan for recorder") { Task { await model.scan() } }
-            } else {
-                ForEach(model.devices, id: \.identifier) { device in
-                    Button {
-                        Task { await model.sync(address: device.identifier.uuidString, force: true) }
-                    } label: {
-                        HStack {
-                            Text(device.name)
-                            Spacer()
-                            Text("\(device.rssi) dBm").foregroundStyle(.secondary)
-                        }
+        Section {
+            if let address = model.deviceAddress.nonEmpty, !showScanner {
+                // Focused mode: one recorder, the one already paired.
+                HStack(spacing: 14) {
+                    Image(systemName: batterySymbol)
+                        .font(.title2)
+                        .foregroundStyle(batteryColour)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(model.deviceName ?? "Your PLAUD")
+                            .font(Theme.body)
+                        Text(model.battery.map { "\($0)% battery" } ?? "Battery unknown")
+                            .font(Theme.caption)
+                            .foregroundStyle(Theme.textTertiary)
                     }
-                    .disabled(!isIdle)
+                    Spacer()
                 }
-                Button("Scan again") { Task { await model.scan() } }
+                Button {
+                    Task { await model.sync(address: address, force: true) }
+                } label: {
+                    Label("Sync now", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(!isIdle)
+                Button("Pair a different recorder") { showScanner = true }
+                    .font(Theme.caption)
+            } else {
+                if model.devices.isEmpty {
+                    Button("Scan for recorder") { Task { await model.scan() } }
+                } else {
+                    ForEach(model.devices, id: \.identifier) { device in
+                        Button {
+                            Task { await model.sync(address: device.identifier.uuidString, force: true) }
+                        } label: {
+                            HStack {
+                                Text(device.name)
+                                Spacer()
+                                Text("\(device.rssi) dBm").foregroundStyle(.secondary)
+                            }
+                        }
+                        .disabled(!isIdle)
+                    }
+                    Button("Scan again") { Task { await model.scan() } }
+                }
+                if model.deviceAddress.nonEmpty != nil {
+                    Button("Cancel") { showScanner = false }
+                }
             }
+        } header: {
+            Text("Recorder")
         }
+    }
+
+    private var batterySymbol: String {
+        guard let b = model.battery else { return "battery.0percent" }
+        switch b {
+        case 88...: return "battery.100percent"
+        case 63...: return "battery.75percent"
+        case 38...: return "battery.50percent"
+        case 13...: return "battery.25percent"
+        default:    return "battery.0percent"
+        }
+    }
+
+    private var batteryColour: Color {
+        guard let b = model.battery else { return Theme.textTertiary }
+        return b <= 15 ? .red : (b <= 30 ? .orange : .green)
     }
 
     @ViewBuilder private var recordingsSection: some View {

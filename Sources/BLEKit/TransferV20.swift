@@ -58,6 +58,39 @@ public struct V20Assembler: Sendable {
 }
 
 extension PlaudClient {
+    /// Battery percentage (cmd 9 BATT_STATUS).
+    ///
+    /// Response payload is `[status, level]` — verified on hardware: `01 3a`
+    /// reads back 58%. Values outside 0-100 are rejected rather than shown.
+    public func batteryLevel() async -> Int? {
+        do {
+            try await send(cmdBattStatus)
+            guard let resp = await waitResponse(cmdBattStatus, timeout: 6.0),
+                  let level = resp.last, level <= 100 else { return nil }
+            return Int(level)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Delete a recording on the device.
+    ///
+    /// cmd 0x1A is shared between "list" and "delete": a non-zero middle field
+    /// marks the session to remove (payload `[now:4][session:4][0]`). Returns
+    /// true when the session is gone from the refreshed list.
+    public func deleteSession(_ sessionID: UInt32) async throws -> Bool {
+        var payload = Data()
+        var now = UInt32(Date().timeIntervalSince1970).littleEndian
+        var sid = sessionID.littleEndian
+        payload.append(Data(bytes: &now, count: 4))
+        payload.append(Data(bytes: &sid, count: 4))
+        payload.append(0)
+        try await send(cmdGetRecSessions, payload: payload)
+        _ = await waitResponse(cmdGetRecSessions, timeout: 8.0)
+        let remaining = try await getSessions()
+        return !remaining.contains { $0.sessionID == sessionID }
+    }
+
     /// Download a v20 recording. Returns the raw file bytes (the PLAUD.AI
     /// container for E2EE recordings) exactly as the device reports them.
     public func downloadFileV20(

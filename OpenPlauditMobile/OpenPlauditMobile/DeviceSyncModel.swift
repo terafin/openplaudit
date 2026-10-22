@@ -29,6 +29,8 @@ final class DeviceSyncModel: ObservableObject {
     @Published private(set) var stage: Stage = .idle
     @Published private(set) var devices: [DiscoveredDevice] = []
     @Published private(set) var recordings: [RecordingSession] = []
+    @Published private(set) var battery: Int?
+    @Published private(set) var deviceName: String?
     @Published private(set) var lastTranscriptPath: URL?
     @Published var credentialsMarkdown: String = ""
     @Published var deviceAddress: String = ""
@@ -174,6 +176,17 @@ final class DeviceSyncModel: ObservableObject {
     /// Sync automatically when the screen appears, if everything is configured
     /// and a device was used before. Runs once per launch so returning to the
     /// tab does not kick off another transfer.
+    /// Delete the recording from the device once its note is safely delivered.
+    /// Off by default would be safer, but the device is small and the whole
+    /// point is that the phone is the destination.
+    @Published var removeAfterSync: Bool =
+        (UserDefaults.standard.object(forKey: "plaud.removeAfterSync") as? Bool) ?? true
+
+    func setRemoveAfterSync(_ on: Bool) {
+        removeAfterSync = on
+        UserDefaults.standard.set(on, forKey: "plaud.removeAfterSync")
+    }
+
     @Published var autoSyncOnOpen: Bool =
         (UserDefaults.standard.object(forKey: "plaud.autoSync") as? Bool) ?? true
     private var lastAutoSyncAt: Date?
@@ -251,7 +264,9 @@ final class DeviceSyncModel: ObservableObject {
             try await client.connect()
 
             stage = .authenticating
+            deviceName = await client.deviceName
             _ = try await client.handshake()
+            battery = await client.batteryLevel()
             try await client.timeSync()
 
             stage = .listing
@@ -313,9 +328,14 @@ final class DeviceSyncModel: ObservableObject {
                                                     name: Self.fileName(for: session.sessionID),
                                                     sessionID: session.sessionID)
                 markSynced(session.sessionID)
+                if removeAfterSync {
+                    _ = try? await client.deleteSession(session.sessionID)
+                }
                 completed += 1
             }
 
+            battery = await client.batteryLevel() ?? battery
+            recordings = (try? await client.getSessions()) ?? []
             await client.disconnect()
             stage = .done("Synced \(completed) recording\(completed == 1 ? "" : "s")")
         } catch {
@@ -393,5 +413,14 @@ final class DeviceSyncModel: ObservableObject {
         f.dateFormat = "yyyy-MM-dd HH:mm"
         f.timeZone = TimeZone(identifier: "UTC")
         return f.string(from: Date(timeIntervalSince1970: TimeInterval(sessionID))) + " UTC"
+    }
+}
+
+
+extension String {
+    /// Trimmed, or nil when effectively empty.
+    var nonEmpty: String? {
+        let t = trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
     }
 }

@@ -19,6 +19,7 @@ public let protoVoice: UInt8   = 0x02
 
 public let cmdHandshake: UInt16       = 1
 public let cmdGetState: UInt16        = 3
+public let cmdBattStatus: UInt16      = 9
 public let cmdTimeSync: UInt16        = 4
 public let cmdGetStorage: UInt16      = 6
 public let cmdGetRecSessions: UInt16  = 26
@@ -32,6 +33,7 @@ public let cmdFileChecksumRsp: UInt16 = 117
 
 public let cmdNames: [UInt16: String] = [
     1: "HANDSHAKE", 3: "GET_STATE", 4: "TIME_SYNC", 6: "GET_STORAGE",
+    9: "BATT_STATUS",
     26: "GET_REC_SESSIONS", 28: "SYNC_FILE_HEAD", 29: "SYNC_FILE_TAIL",
     112: "FILE_INFO_SYNC", 113: "FILE_INFO_SYNC_RSP",
     114: "FILE_SYNC_DATA", 116: "FILE_CHECKSUM", 117: "FILE_CHECKSUM_RSP",
