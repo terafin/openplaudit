@@ -105,3 +105,74 @@ def test_missing_api_key_raises(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="No OPENAI_API_KEY"):
         W.transcribe_via_openai(str(wav))
+
+
+# --- loop detection + retry ladder -----------------------------------------
+
+def test_loop_detector_flags_repetition():
+    assert W.loop_ratio("Hey, " * 60) > 0.5
+    assert W.loop_ratio("This is a normal sentence about a meeting.") == 0.0
+    assert W.loop_ratio("") == 0.0
+
+
+def test_loop_detector_ignores_normal_emphasis():
+    """A few repeats are normal speech, not a degenerate loop."""
+    assert W.loop_ratio("No, no, no. That is not what I meant at all.") == 0.0
+
+
+def test_clean_chunk_makes_exactly_one_request(monkeypatch):
+    """The ladder must cost nothing when the audio is fine."""
+    calls = []
+    def fake(url, key, model, wav_bytes, timeout=300, extra=None):
+        calls.append(extra)
+        return {"text": "perfectly fine transcript"}
+    monkeypatch.setattr(W, "_post_audio", fake)
+    W._transcribe_chunk("u", "k", "m", b"x")
+    assert len(calls) == 1
+    assert calls[0] is None, "greedy pass first, no extra params"
+
+
+def test_looping_chunk_retries_with_penalty(monkeypatch):
+    """A loop must trigger a retry with temperature + repetition_penalty."""
+    calls = []
+    def fake(url, key, model, wav_bytes, timeout=300, extra=None):
+        calls.append(extra)
+        if extra is None:
+            return {"text": "Hey, " * 80}          # loops at greedy
+        return {"text": "a clean retry transcript"}
+    monkeypatch.setattr(W, "_post_audio", fake)
+    out = W._transcribe_chunk("u", "k", "m", b"x")
+    assert out["text"] == "a clean retry transcript"
+    assert len(calls) == 2
+    assert calls[1]["temperature"] == 0.2
+    assert calls[1]["repetition_penalty"] == 1.1
+
+
+def test_ladder_walks_up_then_keeps_best(monkeypatch):
+    """If every rung still loops, keep the least-loopy result."""
+    seen = []
+    def fake(url, key, model, wav_bytes, timeout=300, extra=None):
+        temp = 0.0 if extra is None else extra["temperature"]
+        seen.append(temp)
+        # loops shrink as temperature rises, never reaching zero
+        return {"text": "Hey, " * int(80 - temp * 50)}
+    monkeypatch.setattr(W, "_post_audio", fake)
+    out = W._transcribe_chunk("u", "k", "m", b"x")
+    assert seen == [0.0, 0.2, 0.4, 0.6, 0.8], "must try the whole ladder"
+    assert out["text"] == "Hey, " * 40, "kept the least-loopy result"
+
+
+def test_retry_stops_at_first_clean_rung(monkeypatch):
+    seen = []
+    def fake(url, key, model, wav_bytes, timeout=300, extra=None):
+        temp = 0.0 if extra is None else extra["temperature"]
+        seen.append(temp)
+        if temp == 0.0:
+            return {"text": "Hey, " * 80}
+        if temp == 0.2:
+            return {"text": "Hey, " * 40}       # better but still looping
+        return {"text": "clean now"}
+    monkeypatch.setattr(W, "_post_audio", fake)
+    out = W._transcribe_chunk("u", "k", "m", b"x")
+    assert seen == [0.0, 0.2, 0.4], "stop as soon as a rung is clean"
+    assert out["text"] == "clean now"

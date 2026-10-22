@@ -198,6 +198,7 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                             api_key=_api_key,
                             chunk_seconds=int(cfg.get("transcription", {}).get(
                                 "chunk_seconds", DEFAULT_CHUNK_SECONDS)),
+                            verbose=verbose,
                         )
                         if not quiet:
                             chunked = result.get("chunks")

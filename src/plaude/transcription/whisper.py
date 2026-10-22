@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import urllib.request
 import wave
 
@@ -12,6 +13,34 @@ import wave
 #
 # 540s leaves headroom under the 600s default rather than testing the boundary.
 DEFAULT_CHUNK_SECONDS = 540
+
+# Whisper's decoder falls into repetition loops on music, applause and SFX —
+# the deployed vLLM endpoint runs temperature 0.0 (pure greedy, single pass) and
+# does NOT expose OpenAI's fallback ladder (condition_on_previous_text,
+# compression_ratio_threshold), so nothing rescues a degenerate window. Measured
+# on a real recording: one 9-minute chunk came back 25% loops at temp 0.0, and
+# 0% at temp 0.2/0.4 with repetition_penalty 1.1.
+#
+# We therefore do what OpenAI's implementation does client-side: try the clean
+# greedy pass first, and only if a loop trips, re-run that chunk up the ladder,
+# stopping at the first clean result. Clean audio costs exactly one request.
+_LOOP_RE = re.compile(
+    r"((?:\b[\w']+\b[ ,.]*){1,4}?)(?:\1){12,}", re.IGNORECASE)
+# After the greedy pass fails, retry at these temperatures with a repetition
+# penalty. Ordered so the closest-to-deterministic pass is tried first.
+_RETRY_LADDER = (0.2, 0.4, 0.6, 0.8)
+_LOOP_REPETITION_PENALTY = 1.1
+
+
+def loop_chars(text: str) -> int:
+    """Characters sitting inside a repetition loop (same phrase repeated >=13x)."""
+    return sum(len(m.group(0)) for m in _LOOP_RE.finditer(text or ""))
+
+
+def loop_ratio(text: str) -> float:
+    """Fraction of the transcript trapped in repetition loops (0.0 to 1.0)."""
+    t = text or ""
+    return loop_chars(t) / len(t) if t else 0.0
 
 
 def _iter_wav_chunks(wav_path: str, chunk_seconds: int):
@@ -54,12 +83,20 @@ def _wrap_pcm_as_wav(pcm: bytes, channels: int, width: int, rate: int) -> bytes:
 
 
 def _post_audio(url: str, key: str, model: str, wav_bytes: bytes,
-                timeout: int = 300) -> dict:
-    """POST one WAV to an OpenAI-compatible /audio/transcriptions endpoint."""
+                timeout: int = 300, extra: dict | None = None) -> dict:
+    """POST one WAV to an OpenAI-compatible /audio/transcriptions endpoint.
+
+    `extra` adds form fields the endpoint accepts (temperature,
+    repetition_penalty, prompt, ...). vLLM honours these on the transcription
+    route; OpenAI's condition_on_previous_text is NOT available there.
+    """
     boundary = "----plaude"
     body = bytearray()
     body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"model\""
              f"\r\n\r\n{model}\r\n").encode()
+    for k, v in (extra or {}).items():
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\""
+                 f"\r\n\r\n{v}\r\n").encode()
     body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
              f"filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n").encode()
     body += wav_bytes
@@ -73,9 +110,43 @@ def _post_audio(url: str, key: str, model: str, wav_bytes: bytes,
         return json.load(resp)
 
 
+def _transcribe_chunk(url: str, key: str, model: str, wav_bytes: bytes,
+                      verbose: bool = False) -> dict:
+    """Transcribe one WAV, retrying up the temperature ladder on a loop.
+
+    Greedy (temperature 0.0) is the best output when it behaves, so it is tried
+    first. Whisper's degenerate loops are a decoding pathology, not a model
+    limit: raising temperature and penalising repetition reliably breaks them
+    (measured 25% -> 0% on a real chunk). If every rung still loops, the result
+    with the least looping text wins rather than failing the whole recording.
+    """
+    result = _post_audio(url, key, model, wav_bytes)
+    text = (result.get("text") or "").strip()
+    if loop_ratio(text) == 0.0:
+        return result
+
+    best = result
+    best_ratio = loop_ratio(text)
+    for temp in _RETRY_LADDER:
+        if verbose:
+            print(f"    [retry] loop {best_ratio*100:.1f}% -> temp {temp} "
+                  f"+ repetition_penalty {_LOOP_REPETITION_PENALTY}")
+        cand = _post_audio(url, key, model, wav_bytes, extra={
+            "temperature": temp,
+            "repetition_penalty": _LOOP_REPETITION_PENALTY,
+        })
+        ratio = loop_ratio((cand.get("text") or "").strip())
+        if ratio < best_ratio:
+            best, best_ratio = cand, ratio
+        if ratio == 0.0:
+            return cand
+    return best
+
+
 def transcribe_via_openai(wav_path: str, model: str = "whisper-1",
                           api_key: str | None = None,
-                          chunk_seconds: int = DEFAULT_CHUNK_SECONDS) -> dict:
+                          chunk_seconds: int = DEFAULT_CHUNK_SECONDS,
+                          verbose: bool = False) -> dict:
     """Transcribe a WAV via any OpenAI-compatible /v1/audio/transcriptions endpoint.
 
     Uses OPENAI_API_KEY and OPENAI_BASE_URL from the environment (standard
@@ -100,7 +171,7 @@ def transcribe_via_openai(wav_path: str, model: str = "whisper-1",
     # Short enough to send whole — the common case, and one round trip.
     if duration and duration <= chunk_seconds:
         with open(wav_path, "rb") as f:
-            data = _post_audio(url, key, model, f.read())
+            data = _transcribe_chunk(url, key, model, f.read(), verbose=verbose)
         text = (data.get("text") or "").strip()
         return {
             "duration_seconds": round(duration, 1),
@@ -117,7 +188,7 @@ def transcribe_via_openai(wav_path: str, model: str = "whisper-1",
     chunk_index = -1
     for chunk_index, start, chunk_dur, wav_bytes in _iter_wav_chunks(
             wav_path, chunk_seconds):
-        data = _post_audio(url, key, model, wav_bytes)
+        data = _transcribe_chunk(url, key, model, wav_bytes, verbose=verbose)
         piece = (data.get("text") or "").strip()
         if piece:
             texts.append(piece)
