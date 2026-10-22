@@ -14,6 +14,7 @@ before it advertises.
 
 import asyncio
 import base64
+import logging
 import re
 import struct
 import time
@@ -35,6 +36,8 @@ from .protocol import (
 )
 
 DEFAULT_CREDS_PATH = "~/plaud-credentials.md"
+
+log = logging.getLogger(__name__)
 
 # --- File transfer tunables -------------------------------------------------
 # A dropped BLE notification shows up as an offset jump. Real drops arrive in
@@ -86,8 +89,8 @@ class Crypto:
         plain = self._chacha.decrypt(self.nonce, ciphertext, self.ad)
         counter = struct.unpack("<I", plain[:4])[0]
         if counter <= self.receive_counter:
-            # Warn but don't fail — device may resend on reconnect.
-            pass
+            log.debug("out-of-order counter %d (last %d); device may resend",
+                      counter, self.receive_counter)
         self.receive_counter = counter
         return plain[4:]
 
@@ -132,12 +135,10 @@ class PlaudClient:
         self.port_version = 0
         self.ssn: str | None = None
         self.crypto: Crypto | None = None
+        self._decrypt_failures = 0
         self._file_handler = None
 
         # Voice/file packet capture state (used by transfer module)
-        self.voice_data = bytearray()
-        self.voice_packets = 0
-        self.receiving = False
 
     def _get_queue(self, cmd_id: int) -> asyncio.Queue:
         if cmd_id not in self._queues:
@@ -162,8 +163,10 @@ class PlaudClient:
             try:
                 raw = self.crypto.decrypt(raw)
             except Exception as e:
-                if self.verbose:
-                    print(f"  [decrypt fail] {e}")
+                # A crypto bug otherwise presents as a gap or stall further
+                # down; count it so the transfer can fail honestly.
+                self._decrypt_failures += 1
+                log.debug("decrypt failed (%d so far): %s", self._decrypt_failures, e)
                 return
 
         if len(raw) < 1:
@@ -485,6 +488,7 @@ class PlaudClient:
         """
         if self.verbose or verbose:
             print(f"  [sync] file {file_index} (from offset {start_offset}), size={file_size}")
+        self._decrypt_failures = 0
 
         received = bytearray()
         expected_offset = start_offset
@@ -707,6 +711,9 @@ class PlaudClient:
                                 struct.pack("<III", session_id, resume, file_size))
                 await _wait_complete(head_timeout=10.0,
                                      stall_grace=STALL_GRACE_SECONDS)
+            if self._decrypt_failures:
+                raise RuntimeError(
+                    f"{self._decrypt_failures} frame(s) failed to decrypt")
             if not received:
                 raise RuntimeError("Transfer completed but no data received")
             # Integrity handshake. The tail frame carries the device's CRC of

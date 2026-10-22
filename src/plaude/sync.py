@@ -174,39 +174,47 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                 else:
                     raise RuntimeError(f"WAV file not produced: {wav_path}")
 
-                # Phase 3: Transcribe (disabled — whisper/ML stack not installed).
-                # Write a deterministic no-op transcript and still mark the session
-                # transcribed so idempotent dedupe keeps working and sessions are
-                # not re-downloaded. To restore Whisper transcription, install
-                # openai-whisper and remove the _whisper_disabled shortcut below.
+                # Phase 3: Transcribe — endpoint when a key is configured,
+                # otherwise local Whisper.
                 from .audio.decoder import get_wav_duration
-                _whisper_disabled = True
+                import os as _os
+                api_key = (cfg.get("transcription", {}).get("api_key")
+                           or _os.environ.get("OPENAI_API_KEY"))
 
-                if _whisper_disabled:
-                    # Additive: if an OpenAI-compatible transcription endpoint is
-                    # configured (OPENAI_API_KEY + OPENAI_BASE_URL in env, or
-                    # transcription.api_key), use it instead of the no-op below.
-                    import os as _os
-                    _api_key = cfg.get("transcription", {}).get("api_key") or _os.environ.get("OPENAI_API_KEY")
-                    if _api_key:
-                        from .transcription.whisper import (
-                            transcribe_via_openai, DEFAULT_CHUNK_SECONDS,
-                        )
-                        result = transcribe_via_openai(
+                if api_key:
+                    from .transcription.whisper import (
+                        transcribe_via_openai, DEFAULT_CHUNK_SECONDS,
+                    )
+                    result = transcribe_via_openai(
+                        str(wav_path),
+                        model=cfg.get("transcription", {}).get("openai_model", "whisper-1"),
+                        api_key=api_key,
+                        chunk_seconds=int(cfg.get("transcription", {}).get(
+                            "chunk_seconds", DEFAULT_CHUNK_SECONDS)),
+                        verbose=verbose,
+                    )
+                    if not quiet:
+                        chunked = result.get("chunks")
+                        how = f", {chunked} chunks" if chunked else ""
+                        print(f"  Transcribed via OpenAI-compatible endpoint "
+                              f"({result['model']}{how}) — {wav_path.name} "
+                              f"({result['duration_seconds']:.1f}s)")
+                else:
+                    try:
+                        from .transcription.whisper import load_model, transcribe_with_model
+                        if whisper_model is None:
+                            whisper_model = load_model(cfg["transcription"]["model"])
+                        result = transcribe_with_model(
+                            whisper_model,
                             str(wav_path),
-                            model=cfg.get("transcription", {}).get("openai_model", "whisper-1"),
-                            api_key=_api_key,
-                            chunk_seconds=int(cfg.get("transcription", {}).get(
-                                "chunk_seconds", DEFAULT_CHUNK_SECONDS)),
-                            verbose=verbose,
+                            model_name=cfg["transcription"]["model"],
+                            language=cfg["transcription"]["language"] or None,
                         )
-                        if not quiet:
-                            chunked = result.get("chunks")
-                            how = f", {chunked} chunks" if chunked else ""
-                            print(f"  Transcribed via OpenAI-compatible endpoint "
-                                  f"({result['model']}{how}) — {wav_path.name} "
-                                  f"({result['duration_seconds']:.1f}s)")
-                    else:
+                        result["file"] = fname
+                    except RuntimeError as exc:
+                        # No local Whisper and no endpoint: keep the session
+                        # marked transcribed so it is not re-downloaded, but
+                        # report why the transcript is empty.
                         duration = get_wav_duration(str(wav_path)) or 0.0
                         result = {
                             "file": fname,
@@ -215,23 +223,10 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                             "language": "unknown",
                             "segments": [],
                             "text": "",
-                            "note": "Transcription disabled (openai-whisper not installed). See ~/openplaudit-no-whisper.patch.",
+                            "note": f"Transcription skipped: {exc}",
                         }
                         if not quiet:
-                            print(f"  Transcription disabled (no whisper stack) — {wav_path.name} ({duration:.1f}s)")
-                else:
-                    if whisper_model is None:
-                        from .transcription.whisper import load_model
-                        whisper_model = load_model(cfg["transcription"]["model"])
-
-                    from .transcription.whisper import transcribe_with_model
-                    result = transcribe_with_model(
-                        whisper_model,
-                        str(wav_path),
-                        model_name=cfg["transcription"]["model"],
-                        language=cfg["transcription"]["language"] or None,
-                    )
-                    result["file"] = fname
+                            print(f"  {result['note']} — {wav_path.name}")
 
                 transcript_path = dirs["transcripts"] / f"{fname}.json"
                 transcript_path.write_text(json.dumps(result, indent=2, ensure_ascii=False))
