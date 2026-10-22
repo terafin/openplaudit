@@ -270,6 +270,20 @@ struct DeviceSettingsView: View {
                          ? "Default: the app's folder, visible in Files. Choose iCloud Drive or a vault folder to keep notes off this phone."
                          : "Notes are written here instead of the phone.")
                 }
+                Section {
+                    Button("Test transcription settings") {
+                        Task {
+                            let result = await model.checkTranscriptionSettings()
+                            model.setTestResult(result)
+                        }
+                    }
+                    if let r = model.testResult, r.hasPrefix("OK") || r.contains("not served") || r.contains("HTTP") {
+                        Text(r).font(.caption)
+                            .foregroundStyle(r.hasPrefix("OK") ? .green : .orange)
+                    }
+                } header: {
+                    Text("Check")
+                }
                 Section("Transcription") {
                     TextField("Endpoint", text: $model.endpoint)
                         .keyboardType(.URL)

@@ -32,9 +32,9 @@ final class DeviceSyncModel: ObservableObject {
     @Published var credentialsMarkdown: String = ""
     @Published var deviceAddress: String = ""
     @Published var deviceToken: String = ""
-    @Published var endpoint: String = ""
+    @Published var endpoint: String = "https://bifrost.siliconspirit.net/v1/audio/transcriptions"
     @Published var apiKey: String = ""
-    @Published var model: String = "whisper-1"
+    @Published var model: String = "vllm/whisper-large-v3"
     @Published private(set) var settingsError: String?
     @Published private(set) var outputFolderName: String?
     @Published var destination: String = "folder"
@@ -67,6 +67,7 @@ final class DeviceSyncModel: ObservableObject {
         mcpToken = KeychainHelper.load(key: mcpTokenKey) ?? ""
         mcpAgentID = UserDefaults.standard.string(forKey: "plaud.mcpAgentID") ?? ""
         mcpServer = UserDefaults.standard.string(forKey: "plaud.mcpServer") ?? mcpServer
+        model = UserDefaults.standard.string(forKey: "plaud.model") ?? model
         endpoint = KeychainHelper.load(key: endpointKey) ?? endpoint
         apiKey = KeychainHelper.load(key: apiKeyKey) ?? ""
     }
@@ -92,6 +93,7 @@ final class DeviceSyncModel: ObservableObject {
             UserDefaults.standard.set(vaultFolder, forKey: vaultFolderKey)
             UserDefaults.standard.set(mcpAgentID, forKey: "plaud.mcpAgentID")
             UserDefaults.standard.set(mcpServer, forKey: "plaud.mcpServer")
+            UserDefaults.standard.set(model, forKey: "plaud.model")
         } catch {
             settingsError = "Could not save: \(error)"
         }
@@ -154,6 +156,46 @@ final class DeviceSyncModel: ObservableObject {
         MCPNoteClient(endpoint: url, token: mcpToken,
                       agentID: mcpAgentID.isEmpty ? nil : mcpAgentID,
                       backendServer: mcpServer.isEmpty ? nil : mcpServer)
+    }
+
+    func setTestResult(_ value: String) { testResult = value }
+
+    /// Verify endpoint, key and model together by listing what the service
+    /// serves. Catches an unroutable model before a recording is spent on it.
+    func checkTranscriptionSettings() async -> String {
+        guard let url = URL(string: endpoint), !apiKey.isEmpty else {
+            return "Endpoint or API key is empty"
+        }
+        var base = url.absoluteString
+        for suffix in ["/audio/transcriptions", "/v1/audio/transcriptions"] where base.hasSuffix(suffix) {
+            base.removeLast(suffix.count)
+            break
+        }
+        guard let modelsURL = URL(string: base + "/models") else {
+            return "Endpoint is not a URL"
+        }
+        var req = URLRequest(url: modelsURL)
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 20
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return "No response from \(base)" }
+            guard (200..<300).contains(http.statusCode) else {
+                return "Service returned HTTP \(http.statusCode) for \(base)/models"
+            }
+            struct Listing: Decodable {
+                struct Entry: Decodable { let id: String }
+                let data: [Entry]
+            }
+            let ids = try JSONDecoder().decode(Listing.self, from: data).data.map(\.id)
+            if ids.contains(model) { return "OK: \(model) is served" }
+            let stem = model.split(separator: "/").last.map(String.init) ?? model
+            let near = ids.filter { $0.contains(stem) }
+            let suggestion = (near.isEmpty ? ids.prefix(3).map { $0 } : near.prefix(3).map { $0 })
+            return "Model '\(model)' is not served. Try: \(suggestion.joined(separator: ", "))"
+        } catch {
+            return "Could not reach \(base): \(error.localizedDescription)"
+        }
     }
 
     func scan() async {
