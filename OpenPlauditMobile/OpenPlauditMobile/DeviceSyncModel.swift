@@ -178,6 +178,18 @@ final class DeviceSyncModel: ObservableObject {
         (UserDefaults.standard.object(forKey: "plaud.autoSync") as? Bool) ?? true
     private var lastAutoSyncAt: Date?
 
+    /// Session IDs already delivered. The phone never deletes from the device,
+    /// so without this every launch re-downloads and re-transcribes everything
+    /// still sitting there.
+    private var syncedIDs: Set<UInt32> = {
+        Set((UserDefaults.standard.array(forKey: "plaud.syncedIDs") as? [Int] ?? []).map(UInt32.init))
+    }()
+
+    private func markSynced(_ id: UInt32) {
+        syncedIDs.insert(id)
+        UserDefaults.standard.set(syncedIDs.map(Int.init), forKey: "plaud.syncedIDs")
+    }
+
     /// True while a transfer is running, so a resume cannot start a second one.
     var isBusy: Bool {
         switch stage {
@@ -218,7 +230,7 @@ final class DeviceSyncModel: ObservableObject {
     }
 
     func sync(address: String, timeBudget: TimeInterval? = nil,
-              maxRecordingBytes: Int? = nil) async {
+              maxRecordingBytes: Int? = nil, force: Bool = false) async {
         deviceAddress = address
         try? KeychainHelper.save(key: addressKey, value: address)
 
@@ -255,6 +267,7 @@ final class DeviceSyncModel: ObservableObject {
             var completed = 0
 
             for session in sessions {
+                if !force, syncedIDs.contains(session.sessionID) { continue }
                 if let max = maxRecordingBytes, Int(session.fileSize) > max {
                     continue    // leave it for a window with more room
                 }
@@ -272,7 +285,26 @@ final class DeviceSyncModel: ObservableObject {
                     raw, privateKeyPEM: creds.rsaPrivateKeyPEM)
 
                 stage = .transcribing(0, 1)
-                let result = try await transcriber.transcribe(frames: frames)
+                let result: Transcriber.Result
+                do {
+                    result = try await transcriber.transcribe(frames: frames)
+                } catch {
+                    // Keep the exact bytes we sent (and the container we
+                    // decrypted) so the failure can be inspected off-device.
+                    let dbg = FileManager.default.urls(for: .documentDirectory,
+                                                       in: .userDomainMask)[0]
+                        .appendingPathComponent("PlaudeDebug", isDirectory: true)
+                    try? FileManager.default.createDirectory(at: dbg, withIntermediateDirectories: true)
+                    let stem = Self.fileName(for: session.sessionID)
+                    try? raw.write(to: dbg.appendingPathComponent("\(stem).container"))
+                    try? frames.write(to: dbg.appendingPathComponent("\(stem).frames"))
+                    try? OggOpus.mux(frames: frames)
+                        .write(to: dbg.appendingPathComponent("\(stem).ogg"))
+                    throw NSError(domain: "plaude", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "\(error.localizedDescription) [container \(raw.count)B, frames \(frames.count)B — debug copy saved]"
+                    ])
+                }
 
                 let title = Self.title(for: session.sessionID)
                 let md = TranscriptMarkdown.render(result, title: title,
@@ -280,6 +312,7 @@ final class DeviceSyncModel: ObservableObject {
                 lastTranscriptPath = try await save(markdown: md,
                                                     name: Self.fileName(for: session.sessionID),
                                                     sessionID: session.sessionID)
+                markSynced(session.sessionID)
                 completed += 1
             }
 

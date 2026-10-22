@@ -108,7 +108,7 @@ struct DeviceSyncView: View {
             } else {
                 ForEach(model.devices, id: \.identifier) { device in
                     Button {
-                        Task { await model.sync(address: device.identifier.uuidString) }
+                        Task { await model.sync(address: device.identifier.uuidString, force: true) }
                     } label: {
                         HStack {
                             Text(device.name)

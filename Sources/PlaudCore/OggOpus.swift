@@ -20,6 +20,24 @@ public enum OggOpus {
     /// recording; the value only affects container overhead.
     private static let framesPerPage = 50
 
+    /// Structural Opus packet check (RFC 6716 §3.1 TOC).
+    ///
+    /// A device glitch can leave a junk frame in the stream. The Python client
+    /// decodes tolerantly and substitutes silence, but hosted decoders reject
+    /// the WHOLE file for one bad packet — measured: 1 bad frame in 1728 made
+    /// vLLM answer "invalid or corrupted audio". Dropping it is the right call;
+    /// the alternative is losing the transcript.
+    public static func isValidOpusPacket(_ frame: Data) -> Bool {
+        guard let toc = frame.first else { return false }
+        let payload = frame.count - 1
+        switch toc & 0x03 {
+        case 0: return payload >= 1          // one frame
+        case 1: return payload >= 2 && payload % 2 == 0   // two equal frames
+        case 2: return payload >= 2          // two, second shorter
+        default: return payload >= 2         // arbitrary count
+        }
+    }
+
     public static func mux(frames: Data, frameSize: Int = 80,
                            sampleRate: Int = 16000, channels: Int = 1,
                            serial: UInt32 = 0x50_4C_41_55) -> Data {
@@ -55,6 +73,7 @@ public enum OggOpus {
             let frame = frames.subdata(in: offset..<end)
             offset = end
             if frame.count < frameSize { break }        // drop a torn tail
+            guard isValidOpusPacket(frame) else { continue }   // skip junk
             packet.append(frame)
             if packet.count == framesPerPage {
                 granule += UInt64(packet.count) * granulePerFrame
