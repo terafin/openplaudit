@@ -3,6 +3,7 @@
 import asyncio
 import datetime
 import sys
+from pathlib import Path
 
 import click
 
@@ -217,6 +218,54 @@ def scan(timeout):
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+
+@main.command("export")
+@click.option("--out", "-o", type=click.Path(),
+              help="Output directory (default: <base>/markdown, or output.markdown_dir)")
+@click.option("--force", "-f", is_flag=True,
+              help="Overwrite existing .md files")
+@click.pass_context
+def export_markdown(ctx, out, force):
+    """Export existing transcript JSON to Markdown (Obsidian-friendly)."""
+    import json
+    from .config import get_output_dirs
+    from .markdown import write_markdown
+
+    cfg = load_config()
+    dirs = get_output_dirs(cfg)
+    src = dirs["transcripts"]
+    dest = Path(out).expanduser() if out else dirs["markdown"]
+    dest.mkdir(parents=True, exist_ok=True)
+
+    written = skipped = failed = 0
+    for jf in sorted(src.glob("*.json")):
+        md = dest / f"{jf.stem}.md"
+        if md.exists() and not force:
+            skipped += 1
+            continue
+        try:
+            result = json.loads(jf.read_text())
+        except Exception as e:
+            click.echo(f"  skip {jf.name}: unreadable ({e})", err=True)
+            failed += 1
+            continue
+        # Skip the pre-VK "transcription disabled" no-ops — they have no text.
+        if not (result.get("text") or "").strip():
+            skipped += 1
+            continue
+        audio = dirs["audio"] / f"{jf.stem}.wav"
+        raw = dirs["raw"] / f"{jf.stem}.opus"
+        write_markdown(
+            result, jf.stem, dest,
+            audio_name=audio.name if audio.exists() else None,
+            raw_name=raw.name if raw.exists() else None,
+        )
+        written += 1
+        click.echo(f"  {jf.stem}.md")
+
+    click.echo(f"\n{dest}")
+    click.echo(f"{written} written, {skipped} skipped (existing or empty), {failed} failed")
 
 
 @main.command()

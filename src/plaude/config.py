@@ -112,6 +112,10 @@ def get_output_dirs(cfg: dict) -> dict[str, Path]:
         "base": base,
         "audio": base / "audio",
         "transcripts": base / "transcripts",
+        # Markdown copies for Obsidian etc. Override with output.markdown_dir
+        # to write straight into a vault, e.g.
+        #   plaude config set output.markdown_dir "~/Documents/Obsidian Vault/Recordings"
+        "markdown": Path(cfg["output"].get("markdown_dir") or base / "markdown").expanduser(),
         "raw": base / "raw",
     }
 

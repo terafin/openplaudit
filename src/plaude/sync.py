@@ -235,12 +235,26 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                 transcript_path = dirs["transcripts"] / f"{fname}.json"
                 transcript_path.write_text(json.dumps(result, indent=2, ensure_ascii=False))
 
+                # Markdown copy for Obsidian and friends.
+                try:
+                    from .markdown import write_markdown
+                    md_path = write_markdown(
+                        result, fname, dirs["markdown"],
+                        audio_name=wav_path.name,
+                        raw_name=raw_path.name if raw_path else None,
+                    )
+                except Exception as e:
+                    md_path = None
+                    if not quiet:
+                        print(f"  (markdown export skipped: {e})")
+
                 mark_transcribed(state, sid)
                 save_state(state)
 
                 if not quiet:
                     preview = result["text"][:100]
-                    print(f"  Transcript: {transcript_path.name}")
+                    print(f"  Transcript: {transcript_path.name}"
+                          + (f" + {md_path.name}" if md_path else ""))
                     print(f"  Preview: {preview}...")
 
                 if cfg["notifications"]["enabled"]:
