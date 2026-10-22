@@ -11,7 +11,6 @@ import pytest
 
 from plaude.transcription import whisper as W
 
-
 def _write_wav(path, seconds: int, rate: int = 16000, channels: int = 1,
                width: int = 2, fill: int = 1):
     with wave.open(str(path), "wb") as w:
@@ -20,10 +19,8 @@ def _write_wav(path, seconds: int, rate: int = 16000, channels: int = 1,
         w.setframerate(rate)
         w.writeframes(bytes([fill]) * (rate * seconds * channels * width))
 
-
 def _fake_post(monkeypatch, calls):
     def fake(url, key, model, wav_bytes, timeout=300):
-        # Confirm each chunk is a standalone, readable WAV.
         import io
         with wave.open(io.BytesIO(wav_bytes), "rb") as w:
             frames = w.getnframes()
@@ -31,7 +28,6 @@ def _fake_post(monkeypatch, calls):
         calls.append(round(frames / rate, 1))
         return {"text": f"chunk{len(calls)}"}
     monkeypatch.setattr(W, "_post_audio", fake)
-
 
 def test_short_audio_is_sent_whole(tmp_path, monkeypatch):
     wav = tmp_path / "short.wav"
@@ -45,7 +41,6 @@ def test_short_audio_is_sent_whole(tmp_path, monkeypatch):
     assert r["text"] == "chunk1"
     assert "chunks" not in r  # single-shot path doesn't report chunking
 
-
 def test_long_audio_is_split_and_stitched(tmp_path, monkeypatch):
     wav = tmp_path / "long.wav"
     _write_wav(wav, 1300)  # 1300s -> three chunks at 540s
@@ -58,7 +53,6 @@ def test_long_audio_is_split_and_stitched(tmp_path, monkeypatch):
     assert r["chunks"] == 3
     assert r["text"] == "chunk1 chunk2 chunk3"
     assert r["duration_seconds"] == 1300.0
-
 
 def test_segments_are_rebased_onto_full_timeline(tmp_path, monkeypatch):
     """Each piece must get a segment offset by where it started."""
@@ -75,7 +69,6 @@ def test_segments_are_rebased_onto_full_timeline(tmp_path, monkeypatch):
     assert starts == [0.0, 540.0, 1080.0]
     assert ends == [540.0, 1080.0, 1300.0]
 
-
 def test_chunk_frames_are_exact_multiple_of_rate(tmp_path):
     """Chunk boundaries must land on whole sample frames or WAVs are invalid."""
     wav = tmp_path / "x.wav"
@@ -83,9 +76,7 @@ def test_chunk_frames_are_exact_multiple_of_rate(tmp_path):
     chunks = list(W._iter_wav_chunks(str(wav), 2))
     durations = [round(d, 4) for _, _, d, _ in chunks]
     assert durations == [2.0, 2.0, 2.0, 1.0]
-    # Total must account for every source frame.
     assert sum(d for _, _, d, _ in chunks) == pytest.approx(7.0, abs=1e-6)
-
 
 def test_multichannel_and_nondefault_rate_roundtrip(tmp_path):
     wav = tmp_path / "s.wav"
@@ -98,7 +89,6 @@ def test_multichannel_and_nondefault_rate_roundtrip(tmp_path):
             assert w.getnchannels() == 2
             assert w.getframerate() == 8000
 
-
 def test_missing_api_key_raises(tmp_path, monkeypatch):
     wav = tmp_path / "x.wav"
     _write_wav(wav, 5)
@@ -106,19 +96,14 @@ def test_missing_api_key_raises(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="No OPENAI_API_KEY"):
         W.transcribe_via_openai(str(wav))
 
-
-# --- loop detection + retry ladder -----------------------------------------
-
 def test_loop_detector_flags_repetition():
     assert W.loop_ratio("Hey, " * 60) > 0.5
     assert W.loop_ratio("This is a normal sentence about a meeting.") == 0.0
     assert W.loop_ratio("") == 0.0
 
-
 def test_loop_detector_ignores_normal_emphasis():
     """A few repeats are normal speech, not a degenerate loop."""
     assert W.loop_ratio("No, no, no. That is not what I meant at all.") == 0.0
-
 
 def test_clean_chunk_makes_exactly_one_request(monkeypatch):
     """The ladder must cost nothing when the audio is fine."""
@@ -130,7 +115,6 @@ def test_clean_chunk_makes_exactly_one_request(monkeypatch):
     W._transcribe_chunk("u", "k", "m", b"x")
     assert len(calls) == 1
     assert calls[0] is None, "greedy pass first, no extra params"
-
 
 def test_looping_chunk_retries_with_penalty(monkeypatch):
     """A loop must trigger a retry with temperature + repetition_penalty."""
@@ -147,20 +131,17 @@ def test_looping_chunk_retries_with_penalty(monkeypatch):
     assert calls[1]["temperature"] == 0.2
     assert calls[1]["repetition_penalty"] == 1.1
 
-
 def test_ladder_walks_up_then_keeps_best(monkeypatch):
     """If every rung still loops, keep the least-loopy result."""
     seen = []
     def fake(url, key, model, wav_bytes, timeout=300, extra=None):
         temp = 0.0 if extra is None else extra["temperature"]
         seen.append(temp)
-        # loops shrink as temperature rises, never reaching zero
         return {"text": "Hey, " * int(80 - temp * 50)}
     monkeypatch.setattr(W, "_post_audio", fake)
     out = W._transcribe_chunk("u", "k", "m", b"x")
     assert seen == [0.0, 0.2, 0.4, 0.6, 0.8], "must try the whole ladder"
     assert out["text"] == "Hey, " * 40, "kept the least-loopy result"
-
 
 def test_retry_stops_at_first_clean_rung(monkeypatch):
     seen = []

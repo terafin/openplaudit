@@ -18,7 +18,6 @@ RX_UUID = "00002bb1-0000-1000-8000-00805f9b34fb"  # host -> device (write)
 PROTO_COMMAND = 0x01
 PROTO_VOICE = 0x02
 
-# Command IDs (v20 / project 888 map — see opendict constants.ts)
 CMD_HANDSHAKE = 0x01
 CMD_GET_SSN = 0x02
 CMD_GET_STATE = 0x03
@@ -28,20 +27,13 @@ CMD_GET_DEVICE_INFO = 0x09
 CMD_GET_FILE_LIST = 0x0A
 CMD_GET_STORAGE = 0x0D
 CMD_GET_REC_SESSIONS = 0x1A  # real file/session list (APK ii/v), NOT 0x0A
-# NOTE: cmd 0x14 (CMD_RECORD) is the record command (ji/j0) — never used for
-# file sync. The sync family is: 28 head (ii/v0), 29 tail/response, 30 stop
-# (ii/u0). There is NO "prepare" command.
 CMD_RECORD = 0x14
 CMD_SYNC_FILE_HEAD = 0x1C
 CMD_SYNC_FILE_TAIL = 0x1D
 CMD_SYNC_FILE_STOP = 0x1E
-# CRC handshake after the tail: host sends its own CRC (cmd 116), device
-# acknowledges (cmd 117). Per docs/plaude-documentation.md the tail carries
-# [session_id:4][crc:2LE] and 0xFFFF means "skip verification".
 CMD_FILE_CHECKSUM = 0x74      # 116
 CMD_FILE_CHECKSUM_RSP = 0x75  # 117
 
-# v20+ pre-handshake opcodes (project 888/881 use 0xFE20, not 0xFE10)
 CMD_PRE_HANDSHAKE_NEW = 0xFE20
 CMD_PRE_HANDSHAKE_CNF = 0xFE11
 CMD_SEND_RSA_PUBKEY = 0xFE12
@@ -52,7 +44,6 @@ PRE_HANDSHAKE_CMDS = {
     CMD_SEND_RSA_PUBKEY,
 }
 
-# Data packet types (after decryption)
 PACKET_FILE_DATA = 0x02  # session_id(4) offset(4) chunk_len(1) data...
 PACKET_FILE_DATA_ALT = 0x03
 PACKET_FILE_DATA_ALT2 = 0x05
@@ -69,7 +60,6 @@ CMD_NAMES = {
     0xFE12: "SEND_RSA_PUBKEY",
 }
 
-# Handshake status codes (response byte at payload[0], i.e. frame index 3)
 HANDSHAKE_STATUS = {
     0: "SUCCESS",
     1: "TOKEN_NOT_MATCH",
@@ -79,17 +69,13 @@ HANDSHAKE_STATUS = {
     255: "MODE_NOT_MATCH",
 }
 
-# Pre-handshake chunk size for SN signature and RSA public key
 CHUNK_SIZE = 100
 
-# MTU indicator bytes sent during handshake (host MTU)
 MTU_INDICATOR = bytes([0x02, 0x00])
-
 
 def build_cmd(cmd_id: int, payload: bytes = b"") -> bytes:
     """Build a BLE command packet: [proto_type:1][cmd_id:2LE][payload]."""
     return struct.pack("<BH", PROTO_COMMAND, cmd_id) + payload
-
 
 def build_pre_handshake_chunk(cmd_id: int, total: int, index: int, data: bytes) -> bytes:
     """Build a pre-handshake chunk: [cmd_id:2LE][total:1][index:1][data].
@@ -98,14 +84,12 @@ def build_pre_handshake_chunk(cmd_id: int, total: int, index: int, data: bytes) 
     """
     return struct.pack("<HBB", cmd_id, total, index) + data
 
-
 def build_handshake_packet(token: bytes, port_version: int) -> bytes:
     """Build the handshake command payload: MTU + portVersion + token."""
     return build_cmd(
         CMD_HANDSHAKE,
         MTU_INDICATOR + bytes([port_version & 0xFF]) + token[:32].ljust(32, b"\x00"),
     )
-
 
 def build_two_handshake_packet(token: bytes, port_version: int, ssn: str) -> bytes:
     """Two-handshake for v20+: MTU + portVersion + token + 8-byte SSN."""
@@ -114,7 +98,6 @@ def build_two_handshake_packet(token: bytes, port_version: int, ssn: str) -> byt
         CMD_HANDSHAKE,
         MTU_INDICATOR + bytes([port_version & 0xFF]) + token[:32].ljust(32, b"\x00") + ssn_bytes,
     )
-
 
 def build_sync_time_packet(now: int | None = None, tz_offset_hours: int | None = None) -> bytes:
     """Sync-time payload: [unix_ts:4LE][tz_offset_hours:1]."""
@@ -126,7 +109,6 @@ def build_sync_time_packet(now: int | None = None, tz_offset_hours: int | None =
         tz_offset_hours = -(_dt.datetime.now().astimezone().utcoffset() or _dt.timedelta(0)).total_seconds() // 3600
         tz_offset_hours = int(tz_offset_hours)
     return build_cmd(CMD_TIME_SYNC, struct.pack("<Ib", now, tz_offset_hours))
-
 
 def parse_handshake_response(frame: bytes) -> dict:
     """Parse a (decrypted) handshake response frame.
@@ -142,7 +124,6 @@ def parse_handshake_response(frame: bytes) -> dict:
         out["firmware"] = frame[3:].hex()
     return out
 
-
 def parse_ssn_response(frame: bytes) -> str:
     """SSN is a null-terminated ASCII string starting at frame[3]."""
     start = 3
@@ -150,7 +131,6 @@ def parse_ssn_response(frame: bytes) -> str:
     while end < min(len(frame), 58) and frame[end] != 0:
         end += 1
     return frame[start:end].decode("ascii", errors="replace")
-
 
 def parse_file_data_packet(frame: bytes) -> dict:
     """Parse a file data packet (type 0x02) for portVersion >= 7.
@@ -172,7 +152,6 @@ def parse_file_data_packet(frame: bytes) -> dict:
         "data": frame[10:10 + chunk_len],
     }
 
-
 def parse_tail_crc(frame: bytes) -> int | None:
     """Extract the device CRC from a SYNC_FILE_TAIL (cmd 0x1D) frame.
 
@@ -182,7 +161,6 @@ def parse_tail_crc(frame: bytes) -> int | None:
     if len(frame) < 9:
         return None
     return struct.unpack("<H", frame[7:9])[0]
-
 
 def crc16_ccitt(data: bytes) -> int:
     """CRC-16/CCITT-FALSE used by PLAUD for file transfer verification."""

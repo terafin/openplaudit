@@ -27,7 +27,6 @@ from plaude.audio.e2ee import (
     parse_header,
 )
 
-
 def _make_keypair() -> tuple[str, str]:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     pub = key.public_key().public_bytes(
@@ -40,7 +39,6 @@ def _make_keypair() -> tuple[str, str]:
     ).decode()
     return pub, priv
 
-
 def _make_opus_frames(n: int = 10, seed: int = 0) -> bytes:
     """Generate `n` valid Opus frames.
 
@@ -50,14 +48,12 @@ def _make_opus_frames(n: int = 10, seed: int = 0) -> bytes:
     to be valid Opus; frame size need not be exactly 80 here.
     """
     enc = opuslib.Encoder(SAMPLE_RATE, 1, opuslib.APPLICATION_VOIP)
-    # A rising chirp produces speech-like packets.
     chirp = array.array("h", (int(2000 * ((i % 640) / 640)) for i in range(640))).tobytes()
     frames = bytearray()
     for i in range(n):
         base = enc.encode(chirp, 640)
         frames += base
     return bytes(frames)
-
 
 def _encrypt_audio(sym_key: bytes, nonce: bytes, opus_data: bytes, segment: int = 80) -> bytes:
     """Encrypt raw Opus frames the way the device does: per-segment ChaCha20,
@@ -70,14 +66,12 @@ def _encrypt_audio(sym_key: bytes, nonce: bytes, opus_data: bytes, segment: int 
         out += c.update(chunk)
     return bytes(out)
 
-
 def _make_e2ee_file(pub_pem: str, opus_data: bytes, seed: int = 1) -> tuple[bytes, bytes]:
     """Build a synthetic PLAUD.AI container. Returns (file_bytes, sym_key)."""
     nonce = bytes(range(12))
     sym_key = bytes((i * 7) & 0xFF for i in range(32))
     cipher = _encrypt_audio(sym_key, nonce, opus_data)
 
-    # RSA-wrap the symmetric key
     pub = serialization.load_pem_public_key(pub_pem.encode())
     key_cipher = pub.encrypt(sym_key, asym_padding.PKCS1v15())
 
@@ -93,7 +87,6 @@ def _make_e2ee_file(pub_pem: str, opus_data: bytes, seed: int = 1) -> tuple[byte
     struct.pack_into("<I", hdr, 0x90, 80)         # segment
     hdr[0x100:0x200] = key_cipher
     return bytes(hdr) + cipher, sym_key
-
 
 class TestParseHeader:
     def test_parse_real_shape(self):
@@ -112,7 +105,6 @@ class TestParseHeader:
     def test_parse_rejects_non_plaud_ai(self):
         with pytest.raises(ValueError):
             parse_header(b"NOTPLAUD" + b"\x00" * 600)
-
 
 class TestDecrypt:
     def test_decrypt_symmetric_key_roundtrip(self):
@@ -136,7 +128,6 @@ class TestDecrypt:
         data, _ = _make_e2ee_file(pub, opus)
         assert decrypt_audio(data, priv) == opus
 
-
 class TestErrorHandling:
     def test_wrong_key_does_not_produce_same_key(self):
         """A wrong RSA key either fails PKCS1 or yields a different key.
@@ -152,7 +143,6 @@ class TestErrorHandling:
         except Exception:
             got = None
         assert got != sym
-        # And the right key always recovers it:
         assert decrypt_symmetric_key(data[0x100:0x200], priv1) == sym
 
     def test_short_file_rejected(self):
@@ -160,6 +150,5 @@ class TestErrorHandling:
             parse_header(b"PLAUD.AI" + b"\x00" * 100)
 
     def test_invalid_opus_frames_raises(self):
-        # 0xFF * 80 is not valid Opus (invalid TOC) and never decodes.
         with pytest.raises(ValueError):
             decode_opus_frames(b"\xff" * 80)

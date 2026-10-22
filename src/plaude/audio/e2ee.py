@@ -49,7 +49,6 @@ SEGMENT_OFFSET = 0x90
 SAMPLES_PER_FRAME = 320  # 20ms @ 16kHz
 MAX_FRAME_SIZE = 80
 
-
 def parse_header(raw_data: bytes) -> dict:
     """Parse the PLAUD.AI header fields needed for decryption."""
     if raw_data[:8] != PLAUD_AI_MAGIC:
@@ -68,7 +67,6 @@ def parse_header(raw_data: bytes) -> dict:
         "keyCipher": raw_data[KEYCIPHER_OFFSET:KEYCIPHER_OFFSET + 256],
     }
 
-
 def decrypt_symmetric_key(key_cipher: bytes, private_key_pem: str) -> bytes:
     """RSA-decrypt the wrapped symmetric key (PKCS1v15). Returns 32 bytes."""
     from cryptography.hazmat.primitives import serialization
@@ -79,7 +77,6 @@ def decrypt_symmetric_key(key_cipher: bytes, private_key_pem: str) -> bytes:
     if len(sym) < 32:
         raise ValueError(f"Decrypted symmetric key too short: {len(sym)}B")
     return sym[:32]
-
 
 def decrypt_audio(raw_data: bytes, private_key_pem: str) -> bytes:
     """Decrypt the audio region of a PLAUD.AI container to raw Opus frames.
@@ -104,7 +101,6 @@ def decrypt_audio(raw_data: bytes, private_key_pem: str) -> bytes:
         out += c.update(chunk)
     return bytes(out)
 
-
 def decode_opus_frames(opus_data: bytes) -> bytes:
     """Decode a stream of raw Opus frames to 16kHz mono PCM.
 
@@ -126,7 +122,6 @@ def decode_opus_frames(opus_data: bytes) -> bytes:
     if ok == 0:
         raise ValueError("No valid Opus frames in decrypted audio")
     return bytes(pcm)
-
 
 def decode_plaud_ai_e2ee(raw_data: bytes, private_key_pem: str) -> bytes:
     """Decode a PLAUD.AI E2EE container to PCM (16kHz mono 16-bit LE)."""

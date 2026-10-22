@@ -26,7 +26,6 @@ PACKET_SIZE = 89
 HEADER_SIZE = 9  # session_id(4) + offset(4) + frame_size(1)
 OGG_MAGIC = b"OggS"
 
-
 def extract_opus_frames(raw_data: bytes) -> list[bytes]:
     """Extract Opus frames from raw PLAUD BLE packets.
 
@@ -53,7 +52,6 @@ def extract_opus_frames(raw_data: bytes) -> list[bytes]:
 
     return frames
 
-
 def decode_opus_frames(frames: list[bytes]) -> bytes:
     """Decode a list of Opus frames to raw PCM (16-bit LE, 16kHz mono)."""
     decoder = opuslib.Decoder(SAMPLE_RATE, CHANNELS)
@@ -66,7 +64,6 @@ def decode_opus_frames(frames: list[bytes]) -> bytes:
             # Insert silence for corrupted frames
             pcm_chunks.append(b"\x00" * SAMPLES_PER_FRAME * 2)
     return b"".join(pcm_chunks)
-
 
 def decode_ogg_opus(raw_data: bytes) -> bytes:
     """Decode an OGG/Opus container (as streamed by v20 devices) to PCM.
@@ -85,7 +82,6 @@ def decode_ogg_opus(raw_data: bytes) -> bytes:
             offset += 1
             continue
 
-        # OGG page: "OggS" + 22 bytes + segment_count(1) + lacing table
         seg_count = raw_data[offset + 26]
         table_start = offset + 27
         table_end = table_start + seg_count
@@ -98,8 +94,6 @@ def decode_ogg_opus(raw_data: bytes) -> bytes:
         if body_start + body_size > n:
             break
 
-        # Reassemble packets from the lacing values: a segment of 255 is
-        # continued on the next lacing byte; a value < 255 closes the packet.
         packet = bytearray()
         for seg in lacing:
             packet += raw_data[body_start:body_start + seg]
@@ -121,26 +115,11 @@ def decode_ogg_opus(raw_data: bytes) -> bytes:
         raise ValueError("No decodable Opus packets found in OGG data")
     return b"".join(pcm_chunks)
 
-
-# PLAUD.AI container layout (verified on NB100 firmware 2.2):
-#   [0x000:8]  "PLAUD.AI" magic
-#   [0x008:4]  proto-ish header (version/flags)
-#   [0x00C:4]  header length or file flags
-#   [0x010:...] userid string + metadata
-#   [0x084:12] 12-byte nonce (ChaCha20-style), then
-#   [0x090:4]  payload length 0x50 (80)
-#   ... zero-padding to
-#   [0x110:...] audio region: a sequence of 320-byte blocks, each holding
-#               FOUR interleaved 80-byte Opus frames (a 4-channel recording).
-#               Frames are config-5 hybrid 16 kHz = 40 ms each.
-# The header region up to 0x110 is metadata/padding; the audio starts at
-# 0x110 and each 320-byte block carries one 80-byte frame per channel.
 PLAUD_AI_MAGIC = b"PLAUD.AI"
 PLAUD_AI_AUDIO_OFFSET = 0x110  # verified: stride-80 decode hits ~100% at 0x110
 PLAUD_AI_BLOCK_SIZE = 320      # 4 channels x 80-byte frames interleaved
 PLAUD_AI_FRAME_SIZE = 80
 PLAUD_AI_CHANNELS = 4
-
 
 def extract_plaud_ai_channel(raw_data: bytes, channel: int = 0) -> list[bytes]:
     """Extract one channel's 80-byte Opus frames from a PLAUD.AI container.
@@ -162,19 +141,16 @@ def extract_plaud_ai_channel(raw_data: bytes, channel: int = 0) -> list[bytes]:
         i += PLAUD_AI_BLOCK_SIZE
     return frames
 
-
 def decode_plaud_ai_frames(frames: list[bytes]) -> bytes:
     """Decode config-5 (40ms) Opus frames to PCM at 16kHz mono."""
     decoder = opuslib.Decoder(SAMPLE_RATE, CHANNELS)
     pcm_chunks = []
     for frame in frames:
         try:
-            # Config-5 hybrid frames are 40ms = 640 samples.
             pcm_chunks.append(decoder.decode(frame, 640))
         except opuslib.OpusError:
             pcm_chunks.append(b"\x00" * 640 * 2)
     return b"".join(pcm_chunks)
-
 
 def decode_plaud_ai(raw_data: bytes) -> bytes:
     """Decode a PLAUD.AI container to PCM, picking the loudest channel.
@@ -190,7 +166,6 @@ def decode_plaud_ai(raw_data: bytes) -> bytes:
         if not frames:
             continue
         pcm = decode_plaud_ai_frames(frames)
-        # RMS of the PCM (16-bit LE mono)
         n = len(pcm) // 2
         if n == 0:
             continue
@@ -208,7 +183,6 @@ def decode_plaud_ai(raw_data: bytes) -> bytes:
         raise ValueError("No decodable audio found in PLAUD.AI container")
     return best_pcm
 
-
 def decode_opus_raw(raw_data: bytes) -> bytes:
     """Decode raw PLAUD BLE data to PCM audio.
 
@@ -224,7 +198,6 @@ def decode_opus_raw(raw_data: bytes) -> bytes:
     frames = extract_opus_frames(raw_data)
     return decode_opus_frames(frames)
 
-
 def save_wav(pcm_data: bytes, path: str, sample_rate: int = SAMPLE_RATE) -> None:
     """Write raw PCM data to a WAV file."""
     with wave.open(path, "wb") as wf:
@@ -233,7 +206,6 @@ def save_wav(pcm_data: bytes, path: str, sample_rate: int = SAMPLE_RATE) -> None
         wf.setframerate(sample_rate)
         wf.writeframes(pcm_data)
 
-
 def get_wav_duration(wav_path: str) -> float | None:
     """Read actual audio duration from a WAV file header. Returns None for non-WAV."""
     try:
@@ -241,7 +213,6 @@ def get_wav_duration(wav_path: str) -> float | None:
             return wf.getnframes() / wf.getframerate()
     except (wave.Error, OSError):
         return None
-
 
 def pcm_to_wav_bytes(pcm_data: bytes, sample_rate: int = SAMPLE_RATE) -> bytes:
     """Convert raw PCM data to in-memory WAV bytes."""

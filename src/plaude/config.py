@@ -27,8 +27,6 @@ DEFAULTS = {
         "language": "en",
         "api_key": "",  # OpenAI-compatible key; falls back to env OPENAI_API_KEY
         "openai_model": "whisper-1",  # model name for the OpenAI-compatible endpoint
-        # Hosted endpoints cap audio duration (vLLM defaults to 600s). Audio
-        # longer than this is split, transcribed piecewise, and stitched.
         "chunk_seconds": 540,
     },
     "sync": {
@@ -41,11 +39,9 @@ DEFAULTS = {
     },
 }
 
-
 def config_path() -> Path:
     """Return the path to the config file."""
     return Path(CONFIG_DIR).expanduser() / CONFIG_FILENAME
-
 
 def _deep_merge(base: dict, overlay: dict) -> dict:
     """Merge overlay into base, returning a new dict with deep-copied nested structure."""
@@ -64,7 +60,6 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
         else:
             result[key] = copy.deepcopy(base_val)
     return result
-
 
 def load_config(path: Path | None = None) -> dict:
     """Load config from TOML file, merged with defaults.
@@ -87,7 +82,6 @@ def load_config(path: Path | None = None) -> dict:
                 log.warning("Failed to parse config %s: %s — using defaults", path, e)
     return _deep_merge({}, DEFAULTS)
 
-
 def save_config(cfg: dict, path: Path | None = None) -> Path:
     """Save config to TOML file. Creates parent directories."""
     path = path or config_path()
@@ -96,14 +90,12 @@ def save_config(cfg: dict, path: Path | None = None) -> Path:
         tomli_w.dump(cfg, f)
     return path
 
-
 def init_config(path: Path | None = None) -> Path:
     """Create a default config file if one doesn't exist."""
     path = path or config_path()
     if path.exists():
         return path
     return save_config(DEFAULTS, path)
-
 
 def get_output_dirs(cfg: dict) -> dict[str, Path]:
     """Return resolved output directory paths."""
@@ -112,13 +104,9 @@ def get_output_dirs(cfg: dict) -> dict[str, Path]:
         "base": base,
         "audio": base / "audio",
         "transcripts": base / "transcripts",
-        # Markdown copies for Obsidian etc. Override with output.markdown_dir
-        # to write straight into a vault, e.g.
-        #   plaude config set output.markdown_dir "~/Documents/Obsidian Vault/Recordings"
         "markdown": Path(cfg["output"].get("markdown_dir") or base / "markdown").expanduser(),
         "raw": base / "raw",
     }
-
 
 def set_nested(cfg: dict, dotted_key: str, value: str) -> dict:
     """Set a value in the config using dotted key notation (e.g. 'device.address').

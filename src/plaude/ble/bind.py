@@ -28,7 +28,6 @@ from pathlib import Path
 
 from .client import PlaudClient, load_credentials
 
-
 def generate_keypair() -> dict[str, str]:
     """Generate a fresh RSA-2048 keypair as PEM strings (public + PKCS8 private)."""
     from cryptography.hazmat.primitives import serialization
@@ -45,7 +44,6 @@ def generate_keypair() -> dict[str, str]:
     ).decode().strip()
     return {"rsa_public_key": public, "rsa_private_key": private}
 
-
 def build_creds(sn_signature: str, keypair: dict[str, str]) -> dict[str, str]:
     """Build a creds dict from an existing sn_signature + a fresh keypair."""
     return {
@@ -53,7 +51,6 @@ def build_creds(sn_signature: str, keypair: dict[str, str]) -> dict[str, str]:
         "rsa_public_key": keypair["rsa_public_key"],
         "rsa_private_key": keypair["rsa_private_key"],
     }
-
 
 def write_creds_file(
     creds: dict[str, str], path: str | Path = "/tmp/openplaudit-selfbind-creds.md"
@@ -69,7 +66,6 @@ def write_creds_file(
     path.write_text(text)
     return path
 
-
 def load_sn_signature(path: str | Path) -> str:
     """Extract just the sn_signature from a credentials file."""
     text = Path(path).read_text()
@@ -77,7 +73,6 @@ def load_sn_signature(path: str | Path) -> str:
     if not m:
         raise ValueError(f"No sn_signature found in {path}")
     return m.group(1)
-
 
 def normalize_historical_user_id(user_id: str) -> str:
     """Normalize a historical user id to the handshake-token form.
@@ -90,7 +85,6 @@ def normalize_historical_user_id(user_id: str) -> str:
         user_id = user_id[len("client_user_"):]
     return user_id.replace("-", "")
 
-
 async def _connect_and_handshake(
     address: str, token: str, creds: dict, verbose: bool = False
 ) -> PlaudClient:
@@ -98,7 +92,6 @@ async def _connect_and_handshake(
     await client.connect()
     await client.handshake(creds=creds)
     return client
-
 
 async def recovery_rebind(
     address: str,
@@ -136,8 +129,6 @@ async def recovery_rebind(
         else token
     )
 
-    # Phase 1: recovery connect — pin historical id as handshake token,
-    # force-clear (0xFE20) tells the device to wipe its stored key material.
     if verbose:
         # Never echo the token itself, even in verbose mode.
         print(f"  [recovery] historical token: <{len(historical_token)} chars>")
@@ -152,7 +143,6 @@ async def recovery_rebind(
         await recovery_client.disconnect()
         raise RuntimeError(f"recovery connect failed: {e}") from e
 
-    # Phase 2: depair — wipe the stale bond on the device.
     if verbose:
         print("  [recovery] sending depair (cmd 5)...")
     depair_resp = await recovery_client.depair(clear_files=clear_files)
@@ -160,9 +150,6 @@ async def recovery_rebind(
         print(f"  <- depair resp {depair_resp.hex() if depair_resp else None}")
     await recovery_client.disconnect()
 
-    # Phase 3: reconnect as normal user — device rebinds to `keypair`.
-    # depair changes the device MAC, so if the configured address no longer
-    # resolves, rescan for the device before rebinding.
     last_err: Exception | None = None
     candidates = [address]
     for attempt in range(retries):
@@ -192,7 +179,6 @@ async def recovery_rebind(
             if found and found not in candidates:
                 candidates.insert(0, found)
     raise RuntimeError(f"re-bind failed after {retries} attempts: {last_err}")
-
 
 async def _rescan_for_plaud(verbose: bool = False) -> str | None:
     """Scan for a PLAUD device and return its address, or None."""

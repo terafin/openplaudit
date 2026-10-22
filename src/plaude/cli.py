@@ -9,7 +9,6 @@ import click
 
 from .config import load_config, save_config, init_config, config_path, set_nested
 
-
 @click.group()
 @click.option("--verbose", "-v", is_flag=True, help="Verbose BLE output")
 @click.option("--quiet", "-q", is_flag=True, help="Minimal output")
@@ -19,7 +18,6 @@ def main(ctx, verbose, quiet):
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
     ctx.obj["quiet"] = quiet
-
 
 @main.command()
 @click.pass_context
@@ -35,7 +33,6 @@ def sync(ctx):
     except KeyboardInterrupt:
         click.echo("\nInterrupted.")
         sys.exit(130)
-
 
 @main.command("list")
 @click.pass_context
@@ -77,7 +74,6 @@ def list_recordings(ctx):
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
-
 
 @main.command()
 @click.argument("session", required=False)
@@ -154,7 +150,6 @@ def delete(ctx, session, yes):
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-
 @main.command("bind")
 @click.option("--historical-user-id", default=None,
               help="Historical user id the device is locked to (recovery rebind). "
@@ -201,7 +196,6 @@ def bind(ctx, historical_user_id, save_creds):
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-
 @main.command()
 @click.option("--timeout", "-t", default=15.0, help="Scan timeout in seconds")
 def scan(timeout):
@@ -225,7 +219,6 @@ def scan(timeout):
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
-
 
 @main.command("export")
 @click.option("--out", "-o", type=click.Path(),
@@ -257,7 +250,6 @@ def export_markdown(ctx, out, force):
             click.echo(f"  skip {jf.name}: unreadable ({e})", err=True)
             failed += 1
             continue
-        # Skip the pre-VK "transcription disabled" no-ops — they have no text.
         if not (result.get("text") or "").strip():
             skipped += 1
             continue
@@ -273,7 +265,6 @@ def export_markdown(ctx, out, force):
 
     click.echo(f"\n{dest}")
     click.echo(f"{written} written, {skipped} skipped (existing or empty), {failed} failed")
-
 
 @main.command()
 @click.argument("file", type=click.Path(exists=True))
@@ -292,12 +283,10 @@ def transcribe(ctx, file, output):
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-
 @main.group()
 def config():
     """Manage configuration."""
     pass
-
 
 @config.command("show")
 def config_show():
@@ -310,13 +299,11 @@ def config_show():
     import tomli_w
     click.echo(tomli_w.dumps(cfg))
 
-
 @config.command("init")
 def config_init():
     """Create default config file."""
     path = init_config()
     click.echo(f"Config file: {path}")
-
 
 @config.command("set")
 @click.argument("key")
@@ -331,7 +318,6 @@ def config_set(key, value):
         sys.exit(1)
     path = save_config(cfg)
     click.echo(f"Set {key} = {value}")
-
 
 if __name__ == "__main__":
     main()

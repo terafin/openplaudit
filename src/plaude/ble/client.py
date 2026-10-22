@@ -39,29 +39,14 @@ DEFAULT_CREDS_PATH = "~/plaud-credentials.md"
 
 log = logging.getLogger(__name__)
 
-# --- File transfer tunables -------------------------------------------------
-# A dropped BLE notification shows up as an offset jump. Real drops arrive in
-# bursts (observed 1840 and 2400 bytes), so any gap up to this size is treated
-# as recoverable by resuming from the expected offset.
 MAX_GAP_BYTES = 65536
-# Consecutive resends at the SAME offset before giving up: no progress is being
-# made, so retrying is pointless.
 MAX_GAP_RESENDS = 20
-# A transfer is stalled when no new bytes arrive for this long. This replaces a
-# flat wall-clock timeout, which killed long-but-live transfers (a multi-hour
-# recording is ~54MB and takes ~45 min over BLE).
 STALL_SECONDS = 120.0
-# Extra stall headroom applied between resends, so "no progress for one stall
-# window" is reported as a stall rather than as the resend-budget error.
 STALL_GRACE_SECONDS = 15.0
-# Progress-file flush interval. Flushing per 80-byte packet would be thousands
-# of syscalls per megabyte.
 PROGRESS_FLUSH_BYTES = 65536
-
 
 class AuthError(Exception):
     """Raised when device authentication fails."""
-
 
 class Crypto:
     """ChaCha20-Poly1305 session crypto with the PLAUD counter scheme.
@@ -94,7 +79,6 @@ class Crypto:
         self.receive_counter = counter
         return plain[4:]
 
-
 def load_credentials(path: str | Path = DEFAULT_CREDS_PATH) -> dict:
     """Load sn_signature + RSA keys from the credentials file."""
     path = Path(path).expanduser()
@@ -119,7 +103,6 @@ def load_credentials(path: str | Path = DEFAULT_CREDS_PATH) -> dict:
         ),
     }
 
-
 class PlaudClient:
     """High-level BLE client for PLAUD Note (portVersion>=20)."""
 
@@ -138,8 +121,6 @@ class PlaudClient:
         self._decrypt_failures = 0
         self._file_handler = None
 
-        # Voice/file packet capture state (used by transfer module)
-
     def _get_queue(self, cmd_id: int) -> asyncio.Queue:
         if cmd_id not in self._queues:
             self._queues[cmd_id] = asyncio.Queue()
@@ -152,19 +133,15 @@ class PlaudClient:
         if len(raw) < 1:
             return
 
-        # Pre-handshake responses have the opcode at bytes 0-1, no type byte.
         opcode = struct.unpack("<H", raw[:2])[0] if len(raw) >= 2 else -1
         if opcode in PRE_HANDSHAKE_CMDS:
             self._get_queue(opcode).put_nowait(raw)
             return
 
-        # Everything else is encrypted once the handshake is complete.
         if self.crypto is not None:
             try:
                 raw = self.crypto.decrypt(raw)
             except Exception as e:
-                # A crypto bug otherwise presents as a gap or stall further
-                # down; count it so the transfer can fail honestly.
                 self._decrypt_failures += 1
                 log.debug("decrypt failed (%d so far): %s", self._decrypt_failures, e)
                 return
@@ -184,7 +161,6 @@ class PlaudClient:
             self._get_queue(cmd).put_nowait(raw)
             return
 
-        # File data packets (type 0x02 / 0x03 / 0x05)
         if self._file_handler is not None:
             if self.verbose:
                 print(f"  [DATA len={len(raw)}] {raw[:16].hex()}")
@@ -274,7 +250,6 @@ class PlaudClient:
             await self._send_raw(build_pre_handshake_chunk(
                 CMD_SEND_RSA_PUBKEY, total, i, pub[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]))
 
-        # Collect all 0xFE12 key-material chunks.
         pkts: dict[int, bytes] = {}
         count = None
         deadline = time.time() + 15.0
@@ -302,7 +277,6 @@ class PlaudClient:
             raise AuthError(f"Pre-handshake: decrypted key material too short ({len(dec)}B)")
         key, nonce, ad = dec[0:32], dec[32:44], dec[44:56]
 
-        # Verify the "PLAUD.AI" verification blob (same keys).
         from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
         try:
             ver = ChaCha20Poly1305(key).decrypt(nonce, dec[56:], ad)
@@ -344,8 +318,6 @@ class PlaudClient:
         self.port_version = parsed["portVersion"]
         self.authenticated = True
 
-        # v20+ two-handshake: device pushes its SSN (cmd 0x02), we reply with
-        # an identical handshake frame that appends the 8-byte SSN.
         if self.port_version >= 20:
             ssn_frame = await self.wait_response(CMD_GET_SSN, timeout=5.0)
             if ssn_frame is not None:
@@ -372,7 +344,6 @@ class PlaudClient:
         resp = await self.wait_response(CMD_RECORD_SWITCH, timeout=6.0)
         if resp is None or len(resp) < 12:
             return None
-        # ji/k0: [type:1][cmd:2][sessionId:8][status:1][...]
         return {
             "session_id": struct.unpack("<Q", resp[3:11])[0],
             "status": resp[11],
@@ -399,8 +370,6 @@ class PlaudClient:
         """
         for attempt in range(max(1, retries)):
             now = int(time.time())
-            # [now:4][session_id:4=0][flag:1=0] — a non-zero middle field makes
-            # the device interpret this as a delete/filter and return empty.
             await self.send(CMD_GET_REC_SESSIONS,
                             struct.pack("<IIB", now, 0, 0))
             resp = await self.wait_response(CMD_GET_REC_SESSIONS, timeout=6.0)
@@ -494,15 +463,8 @@ class PlaudClient:
         expected_offset = start_offset
         done = asyncio.Event()
         error = None
-        # Set when a BLE notification was dropped mid-stream. The outer loop
-        # re-issues SYNC_FILE_HEAD from the gap offset to recover.
         gap_at = None
 
-        # Progress file. The old code rewrote the WHOLE accumulated buffer every
-        # 20KB, synchronously inside the BLE notification callback — so a 900KB
-        # download wrote 900KB to disk per 20KB received (~45x the file size in
-        # total I/O). That blocked the event loop, overflowed CoreBluetooth's
-        # buffers, and dropped notifications in bursts, which is why transfers
         # consistently died at 90-93%. Append instead: one write per packet.
         progress_fh = None
         if progress_path is not None:
@@ -512,17 +474,10 @@ class PlaudClient:
                 if start_offset == 0:
                     progress_fh = p.open("wb")
                 elif p.exists() and p.stat().st_size == start_offset:
-                    # Resume: preload the prefix we already have so `received`
                     # is always the WHOLE file from offset 0. Without this the
-                    # return value would be only the tail, and callers that
-                    # write it to disk would clobber the partial they resumed
-                    # from.
                     received.extend(p.read_bytes())
                     progress_fh = p.open("ab")
                 else:
-                    # Asked to resume but the partial is missing or the wrong
-                    # length. Refuse rather than silently producing a file with
-                    # a hole in the middle.
                     raise RuntimeError(
                         f"Cannot resume from {start_offset}: {p} is missing or "
                         f"has a different size")
@@ -531,39 +486,24 @@ class PlaudClient:
             except Exception:
                 progress_fh = None
 
-        # Resuming without a usable partial would leave a hole at the start.
         if start_offset > 0 and len(received) != start_offset:
             raise RuntimeError(
                 f"Cannot resume from {start_offset}: no partial available "
                 f"(pass progress_path pointing at the existing file)")
 
-        # Holds the SYNC_FILE_TAIL frame when the device ends a stream that way;
-        # it carries the CRC we verify against.
         tail_frame: list = [None]
         last_progress = time.monotonic()
         flushed_to = start_offset
-        # Set just before re-issuing SYNC_FILE_HEAD after a gap: while set, only
-        # a frame at exactly this offset is accepted, so stale frames still in
-        # flight from the aborted stream are discarded instead of being spliced
-        # into the file.
         resync_from = None
 
         def on_data(frame: bytes):
             nonlocal expected_offset, error, gap_at, last_progress, resync_from, flushed_to
             pkt = parse_file_data_packet(frame)
-            # End-of-file marker: offset == 0xFFFFFFFF (4294967295) — a final
-            # data packet with the all-ones offset, NOT 0x0000FFFF.
             if pkt["offset"] == 0xFFFFFFFF:
                 done.set()
                 return
-            # Ignore frames belonging to a different session. Without this,
-            # frames still arriving from the PREVIOUS recording land in this
-            # file's handler, which expects offset 0 — producing the observed
-            # "expected 0, got <huge>" failures on every file after the first.
             if pkt["session_id"] != session_id:
                 return
-            # A gap is pending: ignore the remainder of the aborted stream until
-            # the resend is issued.
             if gap_at is not None:
                 return
             if resync_from is not None:
@@ -573,8 +513,6 @@ class PlaudClient:
             if pkt["offset"] != expected_offset:
                 gap = pkt["offset"] - expected_offset
                 if 0 < gap <= MAX_GAP_BYTES:
-                    # Dropped notification(s). Recover by resuming from the
-                    # offset we still need; the device re-sends from there.
                     gap_at = expected_offset
                     done.set()
                     return
@@ -588,9 +526,6 @@ class PlaudClient:
             if progress_fh is not None:
                 try:
                     progress_fh.write(pkt["data"])
-                    # Flush on a size interval, not per packet: one syscall per
-                    # 80-byte frame would be thousands of calls per megabyte.
-                    # 64KB keeps crash-resilience while staying cheap.
                     if expected_offset - flushed_to >= PROGRESS_FLUSH_BYTES:
                         progress_fh.flush()
                         flushed_to = expected_offset
@@ -603,32 +538,18 @@ class PlaudClient:
         self._file_handler = on_data
 
         async def _wait_complete(head_timeout=10.0, stall_grace=0.0):
-            # 1) Wait for the SYNC_FILE_HEAD response (cmd 28) — confirms the
-            #    device accepted the head and is about to stream data.
             head = await self.wait_response(CMD_SYNC_FILE_HEAD, timeout=head_timeout)
             if head is None:
                 raise RuntimeError("No SYNC_FILE_HEAD response from device")
-            # 2) Wait for the data stream to finish: either the EOF data marker
-            #    (offset==0xFFFFFFFF), SYNC_FILE_TAIL (cmd 0x1D), a hard error,
-            #    or a stall (no new bytes for STALL_SECONDS). A stall check
-            #    replaces the old flat wall-clock timeout so that long-but-live
-            #    transfers are not killed while a dead device is detected fast.
             while True:
-                # A gap pending means this pass is finished: stop waiting so the
-                # caller can trim the buffer and re-issue from the gap offset.
                 if done.is_set() or error is not None or gap_at is not None:
                     break
-                # The tail (cmd 0x1D) is the protocol's other EOF signal; a
-                # device that ends a stream this way must not be treated as a
-                # stall.
                 tail_q = self._get_queue(CMD_SYNC_FILE_TAIL)
                 if not tail_q.empty():
                     tail_frame[0] = tail_q.get_nowait()
                     break
                 _stall = globals()["STALL_SECONDS"]
                 if time.monotonic() - last_progress > _stall + stall_grace:
-                    # Report where we actually got to — the partial on disk is
-                    # resumable, so this is recoverable on the next run.
                     raise RuntimeError(
                         f"Transfer stalled at {expected_offset}/{file_size} "
                         f"(no data for {_stall + stall_grace:.0f}s)")
@@ -639,8 +560,6 @@ class PlaudClient:
         try:
             # Drain stale control frames before starting. GET_REC_SESSIONS
             # frames must not reach the data handler; a leftover SYNC_FILE_TAIL
-            # would make _wait_complete report this transfer complete the
-            # instant it starts (the tail is used as an EOF signal).
             for _stale in (CMD_GET_REC_SESSIONS, CMD_SYNC_FILE_TAIL):
                 try:
                     while not self._get_queue(_stale).empty():
@@ -650,16 +569,7 @@ class PlaudClient:
             await self.send(CMD_SYNC_FILE_HEAD,
                             struct.pack("<III", session_id, start_offset, file_size))
             await _wait_complete()
-            # Recover from dropped BLE notifications: if a gap was detected,
-            # re-issue SYNC_FILE_HEAD from the gap offset so the device
-            # re-sends what we're missing, then continue the stream.
-            #
             # MAX_GAP_RESENDS bounds resends *per gap*, not per transfer. A
-            # transfer makes progress between gaps, so a single global budget
-            # would be exhausted by a few hiccups on a long recording and
-            # abort a transfer that was still moving. A run of consecutive
-            # gaps at the SAME offset means no progress is being made, and
-            # that is what has to be abandoned.
             resends = 0
             resends_at_offset = 0
             last_resume = -1
@@ -679,12 +589,7 @@ class PlaudClient:
                 if self.verbose or verbose:
                     print(f"\n  [resend] #{resends} (x{resends_at_offset} at this "
                           f"offset) from {resume}")
-                # Discard everything at/after the resume point. The device
-                # re-sends from `resume`, so keeping the stale tail would
                 # splice a duplicated block into the middle of the file — it
-                # would still decode, silently wrong. Trim to the resume point
-                # and seek the progress file back to match. Indices are
-                # ABSOLUTE because `received` holds the whole file from 0.
                 if 0 <= resume < expected_offset:
                     del received[resume:]
                     expected_offset = resume
@@ -696,17 +601,10 @@ class PlaudClient:
                         except Exception:
                             pass
                 # `error` is deliberately NOT cleared here: if a resend raises a
-                # hard error, clearing it would swallow the failure and the
-                # loop would exit looking like success (the old bug). The
-                # handler overwrites it on a new hard error anyway.
-                #
-                # Reset the per-pass completion signal. `done` was set by the
-                # gap that got us here; leaving it set would make this pass
                 # return immediately, reporting a truncated file as success.
                 done = asyncio.Event()
                 last_progress = time.monotonic()
                 # Accept only a frame at exactly `resume` until it arrives, so
-                # stale frames from the aborted stream are discarded.
                 resync_from = resume
                 await self.send(CMD_SYNC_FILE_HEAD,
                                 struct.pack("<III", session_id, resume, file_size))
@@ -717,9 +615,6 @@ class PlaudClient:
                     f"{self._decrypt_failures} frame(s) failed to decrypt")
             if not received:
                 raise RuntimeError("Transfer completed but no data received")
-            # Integrity handshake. The tail frame carries the device's CRC of
-            # the payload; compare it against ours and acknowledge, matching the
-            # shipped Swift engine. 0xFFFF means "device skipped verification".
             if tail_frame[0] is not None:
                 device_crc = parse_tail_crc(tail_frame[0])
                 local_crc = crc16_ccitt(bytes(received))
@@ -738,25 +633,17 @@ class PlaudClient:
                     state = "skipped by device" if crc_skipped else (
                         "OK" if device_crc == local_crc else "MISMATCH")
                     print(f"\n  [crc] 0x{local_crc:04x} {state}")
-            # The device reported a smaller file than it listed. Everything it
-            # sent, we got, but the recording itself is short — don't report a
-            # truncated file as a clean success.
             if file_size and expected_offset < file_size:
                 raise RuntimeError(
                     f"Transfer incomplete: device listed {file_size} bytes but "
                     f"sent {expected_offset}")
         finally:
-            # Close the transfer session with the REAL sync-stop (cmd 30,
             # [sessionId:4]) — ii/u0. Never send cmd 0x16 / [0][1] here:
-            # 0x14/0x16 with a trailing [0][1] matches the APK's record-START
             # pattern (ji/j0 R3 → payload [reason][1]) and lights the red LED.
             try:
                 await self.send(CMD_SYNC_FILE_STOP, struct.pack("<I", session_id))
             except Exception:
                 pass
-            # Clear the handler BEFORE closing the file so late notifications
-            # that land after close cannot raise (they'd be swallowed anyway,
-            # but ordering keeps the intent obvious).
             self._file_handler = None
             if progress_fh is not None:
                 try:

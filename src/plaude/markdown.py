@@ -4,15 +4,7 @@ import datetime
 import re
 from pathlib import Path
 
-# Frontmatter matches the vault convention in ~/Documents/Obsidian Vault:
-#   ---
-#   tags: [a, b]
-#   created: YYYY-MM-DD
-#   updated: YYYY-MM-DD
-#   ---
-#   # Title
 _TAG_BASE = ["plaud", "recording"]
-
 
 def _hhmm(seconds: float) -> str:
     """Format seconds as a clock offset: 0:00, 9:03, 1:02:03."""
@@ -20,7 +12,6 @@ def _hhmm(seconds: float) -> str:
     h, rem = divmod(s, 3600)
     m, sec = divmod(rem, 60)
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
-
 
 def _human_duration(seconds: float) -> str:
     s = int(max(0, seconds))
@@ -32,7 +23,6 @@ def _human_duration(seconds: float) -> str:
         return f"{m}m {sec:02d}s"
     return f"{sec}s"
 
-
 def _title(stem: str, result: dict) -> str:
     """Human title: the local start time, with a note-identifying stem."""
     try:
@@ -41,13 +31,11 @@ def _title(stem: str, result: dict) -> str:
     except ValueError:
         return stem.replace("_", " ")
 
-
 def _slug(text: str, limit: int = 60) -> str:
     """A short, filename-safe fragment of the opening words."""
     text = re.sub(r"[^A-Za-z0-9 \-']", " ", text or "")
     words = " ".join(text.split())[:limit].strip()
     return words.rstrip(" -")
-
 
 def render_markdown(result: dict, stem: str, *, updated: str | None = None,
                     audio_name: str | None = None,
@@ -91,8 +79,6 @@ def render_markdown(result: dict, stem: str, *, updated: str | None = None,
     lines.append(f"# {_title(stem, result)}")
     lines.append("")
 
-    # Opening line of the transcript doubles as a summary in Obsidian's
-    # search and file preview.
     opening = _slug(text)
     if opening:
         lines.append(f"> {opening}…")
@@ -129,7 +115,6 @@ def render_markdown(result: dict, stem: str, *, updated: str | None = None,
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
-
 
 def write_markdown(result: dict, stem: str, out_dir: str | Path, *,
                    audio_name: str | None = None,

@@ -19,19 +19,15 @@ from plaude.ble.protocol import (
     PROTO_COMMAND,
 )
 
-
 def _data_packet(session_id: int, offset: int, data: bytes) -> bytes:
     """Build a file-data frame: [type:1][session:4][offset:4][len:1][data]."""
     return bytes([0x02]) + struct.pack("<II", session_id, offset) + bytes([len(data)]) + data
 
-
 def _eof_packet(session_id: int) -> bytes:
     return bytes([0x02]) + struct.pack("<II", session_id, 0xFFFFFFFF) + b"\x00"
 
-
 def _tail_packet() -> bytes:
     return bytes([PROTO_COMMAND]) + struct.pack("<H", CMD_SYNC_FILE_TAIL) + b"\x00" * 4
-
 
 def _make_client(frames: list[bytes]) -> tuple[PlaudClient, dict]:
     """A PlaudClient with mocked BLE that streams `frames` per SYNC_FILE_HEAD.
@@ -57,7 +53,6 @@ def _make_client(frames: list[bytes]) -> tuple[PlaudClient, dict]:
         if cmd_id == CMD_SYNC_FILE_HEAD:
             return b"\x00" * 5
         if cmd_id == CMD_SYNC_FILE_TAIL:
-            # Wait until the download's done event fires (EOF), then return.
             for _ in range(2000):
                 await asyncio.sleep(0.005)
                 if client._eof_seen:
@@ -68,16 +63,11 @@ def _make_client(frames: list[bytes]) -> tuple[PlaudClient, dict]:
     async def fake_send(cmd_id, payload=b""):
         if cmd_id == CMD_SYNC_FILE_HEAD:
             calls["n_head"] += 1
-            # Head payload: [session:4][startOffset:4][fileSize:4]; stream
-            # from the requested offset. On a resend (offset > 0), the device
-            # re-sends the frame at that offset too — synthesize it.
             req_offset = struct.unpack_from("<I", payload, 4)[0] if len(payload) >= 8 else 0
             emitted = set()
             if req_offset > 0 and not any(
                 struct.unpack_from("<I", f, 5)[0] == req_offset for f in frames
             ):
-                # The frame at the resend offset was "dropped" in this mock;
-                # synthesize it as the gap byte value.
                 gap_frame = _data_packet(100, req_offset, bytes([0x42]) * 80)
                 client._on_notify(None, bytearray(gap_frame))
                 emitted.add(req_offset)
@@ -93,7 +83,6 @@ def _make_client(frames: list[bytes]) -> tuple[PlaudClient, dict]:
     client._eof_seen = False
     return client, calls
 
-
 @pytest.mark.asyncio
 async def test_download_no_gap():
     """Normal stream (no drops) completes and returns all bytes."""
@@ -108,24 +97,19 @@ async def test_download_no_gap():
     assert data == b"A" * 80 + b"B" * 80 + b"C" * 80
     assert calls["n_head"] == 1
 
-
 @pytest.mark.asyncio
 async def test_download_recoverable_gap_resends():
     """An 80-byte gap (dropped notification) triggers a resend from the gap."""
     frames = [
         _data_packet(100, 0, b"A" * 80),
-        # gap: packet at offset 80 is dropped; next arrives at 160
         _data_packet(100, 160, b"C" * 80),
         _data_packet(100, 240, b"D" * 80),
         _eof_packet(100),
     ]
     client, calls = _make_client(frames)
     data = await client.download_file(100, 0, 320)
-    # The gap was detected; a resend SYNC_FILE_HEAD was issued at offset 80.
     assert calls["n_head"] >= 2
-    # The missing B frame (offset 80) was recovered via the resend.
     assert data == b"A" * 80 + b"B" * 80 + b"C" * 80 + b"D" * 80
-
 
 @pytest.mark.asyncio
 async def test_gap_larger_than_max_is_error():

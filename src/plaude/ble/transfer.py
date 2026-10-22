@@ -2,10 +2,8 @@
 
 from .client import PlaudClient
 
-
 class DownloadError(Exception):
     """Raised when a file download fails deterministically."""
-
 
 async def download_file(
     client: PlaudClient,

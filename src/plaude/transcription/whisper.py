@@ -6,42 +6,21 @@ import re
 import urllib.request
 import wave
 
-# Hosted Whisper endpoints reject very long audio. vLLM enforces a hard cap
-# (600s by default, "VLLM_MAX_AUDIO_DECODE_DURATION_S") and the OpenAI API caps
-# uploads at 25MB. A conference session is easily an hour, so longer audio is
-# split into chunks, transcribed piecewise, and stitched back together.
-#
-# 540s leaves headroom under the 600s default rather than testing the boundary.
 DEFAULT_CHUNK_SECONDS = 540
 
-# Whisper's decoder falls into repetition loops on music, applause and SFX —
-# the deployed vLLM endpoint runs temperature 0.0 (pure greedy, single pass) and
-# does NOT expose OpenAI's fallback ladder (condition_on_previous_text,
-# compression_ratio_threshold), so nothing rescues a degenerate window. Measured
-# on a real recording: one 9-minute chunk came back 25% loops at temp 0.0, and
-# 0% at temp 0.2/0.4 with repetition_penalty 1.1.
-#
-# We therefore do what OpenAI's implementation does client-side: try the clean
-# greedy pass first, and only if a loop trips, re-run that chunk up the ladder,
-# stopping at the first clean result. Clean audio costs exactly one request.
 _LOOP_RE = re.compile(
     r"((?:\b[\w']+\b[ ,.]*){1,4}?)(?:\1){12,}", re.IGNORECASE)
-# After the greedy pass fails, retry at these temperatures with a repetition
-# penalty. Ordered so the closest-to-deterministic pass is tried first.
 _RETRY_LADDER = (0.2, 0.4, 0.6, 0.8)
 _LOOP_REPETITION_PENALTY = 1.1
-
 
 def loop_chars(text: str) -> int:
     """Characters sitting inside a repetition loop (same phrase repeated >=13x)."""
     return sum(len(m.group(0)) for m in _LOOP_RE.finditer(text or ""))
 
-
 def loop_ratio(text: str) -> float:
     """Fraction of the transcript trapped in repetition loops (0.0 to 1.0)."""
     t = text or ""
     return loop_chars(t) / len(t) if t else 0.0
-
 
 def _iter_wav_chunks(wav_path: str, chunk_seconds: int):
     """Yield (index, start_seconds, duration_seconds, wav_bytes) per piece.
@@ -68,7 +47,6 @@ def _iter_wav_chunks(wav_path: str, chunk_seconds: int):
             index += 1
             start += frames_per_chunk
 
-
 def _wrap_pcm_as_wav(pcm: bytes, channels: int, width: int, rate: int) -> bytes:
     """Wrap raw PCM bytes in a WAV header."""
     import io
@@ -80,7 +58,6 @@ def _wrap_pcm_as_wav(pcm: bytes, channels: int, width: int, rate: int) -> bytes:
         w.setframerate(rate)
         w.writeframes(pcm)
     return buf.getvalue()
-
 
 def _post_audio(url: str, key: str, model: str, wav_bytes: bytes,
                 timeout: int = 300, extra: dict | None = None) -> dict:
@@ -108,7 +85,6 @@ def _post_audio(url: str, key: str, model: str, wav_bytes: bytes,
     })
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.load(resp)
-
 
 def _transcribe_chunk(url: str, key: str, model: str, wav_bytes: bytes,
                       verbose: bool = False) -> dict:
@@ -142,7 +118,6 @@ def _transcribe_chunk(url: str, key: str, model: str, wav_bytes: bytes,
             return cand
     return best
 
-
 def transcribe_via_openai(wav_path: str, model: str = "whisper-1",
                           api_key: str | None = None,
                           chunk_seconds: int = DEFAULT_CHUNK_SECONDS,
@@ -168,7 +143,6 @@ def transcribe_via_openai(wav_path: str, model: str = "whisper-1",
     url = f"{base.rstrip('/')}/audio/transcriptions"
     duration = _get_wav_duration(wav_path)
 
-    # Short enough to send whole — the common case, and one round trip.
     if duration and duration <= chunk_seconds:
         with open(wav_path, "rb") as f:
             data = _transcribe_chunk(url, key, model, f.read(), verbose=verbose)
@@ -182,7 +156,6 @@ def transcribe_via_openai(wav_path: str, model: str = "whisper-1",
             "text": text,
         }
 
-    # Long audio: transcribe in pieces and stitch.
     texts: list[str] = []
     segments: list[dict] = []
     chunk_index = -1
@@ -192,7 +165,6 @@ def transcribe_via_openai(wav_path: str, model: str = "whisper-1",
         piece = (data.get("text") or "").strip()
         if piece:
             texts.append(piece)
-        # Rebase any per-chunk segments onto the full-recording timeline.
         if data.get("segments"):
             for seg in data["segments"]:
                 segments.append({
@@ -201,8 +173,6 @@ def transcribe_via_openai(wav_path: str, model: str = "whisper-1",
                     "text": (seg.get("text") or "").strip(),
                 })
         elif piece:
-            # Endpoint returned no per-segment detail; synthesise one for this
-            # piece so the output still has a usable timeline.
             segments.append({
                 "start": round(start, 2),
                 "end": round(start + chunk_dur, 2),
@@ -218,7 +188,6 @@ def transcribe_via_openai(wav_path: str, model: str = "whisper-1",
         "text": " ".join(texts),
     }
 
-
 def _get_wav_duration(path: str) -> float | None:
     """Duration of a WAV file in seconds, or None if unreadable."""
     try:
@@ -227,7 +196,6 @@ def _get_wav_duration(path: str) -> float | None:
             return w.getnframes() / rate if rate else None
     except Exception:
         return None
-
 
 def transcribe_with_model(
     model,
@@ -264,7 +232,6 @@ def transcribe_with_model(
         "segments": segments,
         "text": result.get("text", "").strip(),
     }
-
 
 def load_model(model_name: str = "medium"):
     """Load a Whisper model. Call once and reuse across transcriptions.

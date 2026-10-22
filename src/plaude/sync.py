@@ -32,17 +32,14 @@ from .state import (
     is_complete, needs_download,
 )
 
-
 def _session_filename(session_id: int) -> str:
     """Convert session_id (unix timestamp) to a timezone-stable filename stem."""
     ts = datetime.datetime.fromtimestamp(session_id, tz=datetime.timezone.utc)
     return ts.strftime("%Y%m%d_%H%M%S_UTC")
 
-
 def _format_local_time(session_id: int) -> str:
     """Format session_id as local time for display only."""
     return datetime.datetime.fromtimestamp(session_id).strftime("%Y-%m-%d %H:%M:%S")
-
 
 async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int:
     """Full sync pipeline. Returns count of newly completed recordings."""
@@ -101,9 +98,6 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                 wav_path = dirs["audio"] / f"{fname}.wav"
 
                 if needs_download(state, sid):
-                    # Resume from a partial left by an interrupted transfer.
-                    # The device honours a nonzero startPos in SYNC_FILE_HEAD,
-                    # and download_file appends from that offset.
                     resume_from = 0
                     if raw_path and raw_path.exists():
                         have = raw_path.stat().st_size
@@ -151,8 +145,6 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                 # Phase 2: Decode
                 if not wav_path.exists() and raw_data is not None:
                     if raw_data[:8] == b"PLAUD.AI":
-                        # E2EE container: RSA-decrypt the symmetric key, then
-                        # per-segment ChaCha20, then decode raw Opus frames.
                         from .audio.e2ee import decode_plaud_ai_e2ee
                         from .ble.client import load_credentials
                         if not quiet:
@@ -174,8 +166,6 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                 else:
                     raise RuntimeError(f"WAV file not produced: {wav_path}")
 
-                # Phase 3: Transcribe — endpoint when a key is configured,
-                # otherwise local Whisper.
                 from .audio.decoder import get_wav_duration
                 import os as _os
                 api_key = (cfg.get("transcription", {}).get("api_key")
@@ -212,9 +202,6 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                         )
                         result["file"] = fname
                     except RuntimeError as exc:
-                        # No local Whisper and no endpoint: keep the session
-                        # marked transcribed so it is not re-downloaded, but
-                        # report why the transcript is empty.
                         duration = get_wav_duration(str(wav_path)) or 0.0
                         result = {
                             "file": fname,
@@ -231,7 +218,6 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
                 transcript_path = dirs["transcripts"] / f"{fname}.json"
                 transcript_path.write_text(json.dumps(result, indent=2, ensure_ascii=False))
 
-                # Markdown copy for Obsidian and friends.
                 try:
                     from .markdown import write_markdown
                     md_path = write_markdown(
@@ -283,7 +269,6 @@ async def run_sync(cfg: dict, verbose: bool = False, quiet: bool = False) -> int
     if not quiet:
         print(f"\nDone — {completed_count} recording(s) synced.")
     return completed_count
-
 
 def transcribe_local(file_path: str, cfg: dict, output_dir: str | None = None, quiet: bool = False) -> dict:
     """Transcribe a local audio file (WAV, MP3, etc.) using Whisper."""
