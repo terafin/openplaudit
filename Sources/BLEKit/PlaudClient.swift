@@ -5,6 +5,7 @@
 import CoreBluetooth
 import Foundation
 import os
+import PlaudCore
 
 private let log = Logger(subsystem: "com.openplaudit.app", category: "ble")
 
@@ -55,6 +56,21 @@ public enum BLEError: Error, LocalizedError {
 public actor PlaudClient {
     private let address: String
     private let token: String
+    /// v20 binding credentials. When present the client runs the RSA
+    /// pre-handshake and encrypts every subsequent frame; when nil it falls
+    /// back to the legacy plaintext handshake (demo/unbound devices).
+    private let credentials: DeviceCredentials?
+    private var sessionCrypto: SessionCrypto?
+    public private(set) var portVersion: UInt8 = 0
+    public private(set) var ssn: String?
+
+    // Pre-handshake frames are unencrypted and have the opcode in bytes 0-1,
+    // so they cannot share the command-response path.
+    // v20 file assembly (see TransferV20.swift).
+    private var assembler: V20Assembler?
+
+    private var preHandshakeFrames: [Data] = []
+    private var preHandshakeWaiters: [UInt16: CheckedContinuation<Data?, Never>] = [:]
 
     private let delegate: ClientDelegate
     private var centralManager: CBCentralManager?
@@ -72,9 +88,11 @@ public actor PlaudClient {
     public private(set) var isConnected = false
     public private(set) var deviceName: String?
 
-    public init(address: String, token: String) {
+    public init(address: String, token: String,
+                credentials: DeviceCredentials? = nil) {
         self.address = address
         self.token = token
+        self.credentials = credentials
         self.delegate = ClientDelegate()
     }
 
@@ -100,6 +118,9 @@ public actor PlaudClient {
 
     /// Authenticate with the device using the binding token.
     public func handshake() async throws -> Bool {
+        if let creds = credentials {
+            return try await v20Handshake(creds)
+        }
         var tokenBytes = Data(token.utf8.prefix(32))
         while tokenBytes.count < 32 { tokenBytes.append(0) }
         let payload = Data([0x02, 0x00, 0x00]) + tokenBytes
@@ -109,6 +130,146 @@ public actor PlaudClient {
               !resp.isEmpty else { return false }
 
         return resp[0] == 0
+    }
+
+    /// v20 authentication: RSA pre-handshake, then a ChaCha20-Poly1305 session.
+    ///
+    /// A bound portVersion-20 device rejects the plaintext handshake with
+    /// TOKEN_NOT_MATCH, so this path is what makes a real device work at all.
+    private func v20Handshake(_ creds: DeviceCredentials) async throws -> Bool {
+        preHandshakeFrames.removeAll()
+
+        // 1. SN signature (0xFE20), chunked.
+        for chunk in V20Auth.chunks(cmd: V20Auth.cmdPreHandshakeNew,
+                                    data: creds.snSignature) {
+            try await sendRaw(chunk)
+        }
+        guard await waitPreHandshake(V20Auth.cmdPreHandshakeConfirm, timeout: 10) != nil else {
+            throw V20Auth.AuthError.noConfirm
+        }
+
+        // 2. Our RSA public key (0xFE12), PEM bytes chunked.
+        for chunk in V20Auth.chunks(cmd: V20Auth.cmdSendRSAPubKey,
+                                    data: Data(creds.rsaPublicKeyPEM.utf8)) {
+            try await sendRaw(chunk)
+        }
+
+        // 3. Collect the device's key material until the announced count is met.
+        let frames = await collectKeyMaterial(timeout: 15)
+        let keys = try V20Auth.sessionKeys(fromChunks: frames,
+                                           privateKeyPEM: creds.rsaPrivateKeyPEM)
+        let crypto = SessionCrypto(keys: keys)
+        sessionCrypto = crypto
+
+        // 4. Encrypted handshake.
+        let payload = V20Auth.handshakePayload(token: token, portVersion: 20)
+        let packet = try crypto.encrypt(V20Auth.buildCmd(cmdHandshake, payload: payload))
+        try await sendRaw(packet)
+        guard let resp = await waitResponse(cmdHandshake, timeout: 10) else {
+            throw BLEError.handshakeFailed
+        }
+        guard let status = resp.first else { throw BLEError.handshakeFailed }
+        guard status == 0 else {
+            throw V20Auth.AuthError.handshakeRejected(status)
+        }
+        if resp.count > 2 {
+            portVersion = resp[2]
+        }
+
+        // 5. Two-handshake: the device pushes its SSN and expects it echoed back.
+        if portVersion >= 20, let ssnFrame = await waitResponse(2, timeout: 5.0),
+           ssnFrame.count > 3 {
+            let bytes = ssnFrame.dropFirst(3).prefix { $0 != 0 }
+            ssn = String(bytes: bytes, encoding: .ascii)
+            if let ssn {
+                let two = V20Auth.handshakePayload(token: token, portVersion: portVersion,
+                                                   ssn: ssn)
+                let sealed = try crypto.encrypt(V20Auth.buildCmd(cmdHandshake, payload: two))
+                try await sendRaw(sealed)
+            }
+        }
+        return true
+    }
+
+    // MARK: - Pre-handshake plumbing
+
+    private func waitPreHandshake(_ cmd: UInt16, timeout: TimeInterval) async -> Data? {
+        await withCheckedContinuation { continuation in
+            preHandshakeWaiters[cmd] = continuation
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                if let c = preHandshakeWaiters.removeValue(forKey: cmd) {
+                    c.resume(returning: nil)
+                }
+            }
+        }
+    }
+
+    /// Wait until the device has sent every announced 0xFE12 chunk.
+    private func collectKeyMaterial(timeout: TimeInterval) async -> [Data] {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let frames = preHandshakeFrames.filter {
+                $0.count >= 4 && (UInt16($0[0]) | (UInt16($0[1]) << 8)) == V20Auth.cmdSendRSAPubKey
+            }
+            if let first = frames.first {
+                let total = Int(first[2])
+                let indices = Set(frames.map { Int($0[3]) })
+                if total > 0 && indices.count >= total { return frames }
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return preHandshakeFrames
+    }
+
+    /// Everything that arrives from the device lands here, so decryption can be
+    /// applied to the WHOLE frame before it is parsed — the sealed blob covers
+    /// the proto and command bytes too.
+    // MARK: - v20 file assembly
+
+    func beginAssembly(_ a: V20Assembler) { assembler = a }
+    func endAssembly() { assembler = nil }
+    func assemblerState() -> V20Assembler? { assembler }
+    func clearGap() { assembler?.clearGap() }
+
+    func handleNotification(_ raw: Data) {
+        var frame = raw
+        if let crypto = sessionCrypto {
+            guard let decrypted = try? crypto.decrypt(frame) else {
+                log.error("decrypt failed for \(raw.count) byte frame")
+                return
+            }
+            frame = decrypted
+        }
+        guard !frame.isEmpty else { return }
+
+        // Pre-handshake replies: opcode in bytes 0-1, no proto byte, unencrypted.
+        if sessionCrypto == nil, frame.count >= 2 {
+            let opcode = UInt16(frame[0]) | (UInt16(frame[1]) << 8)
+            if opcode == V20Auth.cmdPreHandshakeConfirm || opcode == V20Auth.cmdSendRSAPubKey {
+                if let waiter = preHandshakeWaiters.removeValue(forKey: opcode) {
+                    waiter.resume(returning: frame)
+                } else {
+                    preHandshakeFrames.append(frame)
+                }
+                return
+            }
+        }
+
+        if frame[0] == protoVoice {
+            // During a v20 download the whole frame is handed to the assembler:
+            // it carries session + offset, and its payload is a slice of the
+            // FILE, not a single Opus frame.
+            if assembler != nil {
+                assembler?.consume(frame)
+            } else {
+                handleVoiceData(Data(frame.dropFirst()))
+            }
+            return
+        }
+        guard frame[0] == protoCommand, frame.count >= 3 else { return }
+        let cmdID = UInt16(frame[1]) | (UInt16(frame[2]) << 8)
+        handleCommandResponse(cmdID: cmdID, payload: Data(frame.dropFirst(3)))
     }
 
     /// Sync current time to the device.
@@ -134,10 +295,25 @@ public actor PlaudClient {
         guard let rx = rxCharacteristic, let p = peripheral else {
             throw BLEError.notConnected
         }
-        let pkt = buildCmd(cmdID, payload: payload)
+        let plain = V20Auth.buildCmd(cmdID, payload: payload)
+        let pkt: Data
+        if let crypto = sessionCrypto {
+            pkt = try crypto.encrypt(plain)
+        } else {
+            pkt = plain
+        }
         let name = cmdNames[cmdID] ?? "CMD_\(cmdID)"
         log.debug("-> [\(name, privacy: .public)] \(pkt.prefix(40).hexString, privacy: .public)")
         p.writeValue(pkt, for: rx, type: .withResponse)
+    }
+
+    /// Write bytes verbatim — used for the pre-handshake, which precedes the
+    /// session cipher and must never be encrypted.
+    func sendRaw(_ data: Data) async throws {
+        guard let rx = rxCharacteristic, let p = peripheral else {
+            throw BLEError.notConnected
+        }
+        p.writeValue(data, for: rx, type: .withResponse)
     }
 
     public func waitResponse(_ cmdID: UInt16, timeout: TimeInterval = 5.0) async -> Data? {
@@ -341,20 +517,9 @@ private final class ClientDelegate: NSObject, CBCentralManagerDelegate, CBPeriph
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let data = characteristic.value, !data.isEmpty else { return }
-        let proto = data[0]
-
-        if proto == protoVoice {
-            let voicePayload = data.dropFirst()
-            Task { await actor?.handleVoiceData(Data(voicePayload)) }
-            return
-        }
-
-        guard proto == protoCommand, data.count >= 3 else { return }
-        let cmdID = data.withUnsafeBytes { ptr -> UInt16 in
-            ptr.loadUnaligned(fromByteOffset: 1, as: UInt16.self).littleEndian
-        }
-        let payload = Data(data.dropFirst(3))
-        Task { await actor?.handleCommandResponse(cmdID: cmdID, payload: payload) }
+        // Decryption has to happen in the actor, because an encrypted frame
+        // seals the proto/command bytes as well as the payload.
+        Task { await actor?.handleNotification(Data(data)) }
     }
 }
 

@@ -37,10 +37,20 @@ let package = Package(
             exclude: ["Package.swift"]
         ),
 
-        // --- macOS libraries ---
+        // --- Cross-platform (macOS + iOS) ---
+        // PLAUD.AI container decryption, Ogg/Opus muxing and transcription, with
+        // no platform-specific dependencies (no libopus, no whisper).
+        .target(
+            name: "PlaudCore",
+            path: "Sources/PlaudCore",
+            exclude: ["Package.swift"],
+            linkerSettings: [.linkedFramework("Security")]
+        ),
         .target(
             name: "BLEKit",
+            dependencies: ["PlaudCore"],
             path: "Sources/BLEKit",
+            exclude: ["Package.swift"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .target(
@@ -112,6 +122,11 @@ let package = Package(
             name: "NetworkKitTests",
             dependencies: ["NetworkKit", "SharedKit", .product(name: "Testing", package: "swift-testing")],
             path: "Tests/NetworkKitTests"
+        ),
+        .testTarget(
+            name: "PlaudCoreTests",
+            dependencies: ["PlaudCore", .product(name: "Testing", package: "swift-testing")],
+            path: "Tests/PlaudCoreTests"
         ),
         .testTarget(
             name: "BLEKitTests",
