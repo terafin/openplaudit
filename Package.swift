@@ -43,11 +43,14 @@ let package = Package(
         .target(
             name: "PlaudCore",
             path: "Sources/PlaudCore",
+            exclude: ["Package.swift"],
             linkerSettings: [.linkedFramework("Security")]
         ),
         .target(
             name: "BLEKit",
+            dependencies: ["PlaudCore"],
             path: "Sources/BLEKit",
+            exclude: ["Package.swift"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .target(

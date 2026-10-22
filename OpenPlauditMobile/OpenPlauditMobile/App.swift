@@ -45,11 +45,17 @@ struct ContentView: View {
                 }
                 .tag(1)
 
+            DeviceSyncView()
+                .tabItem {
+                    Label("Device", systemImage: "dot.radiowaves.left.and.right")
+                }
+                .tag(2)
+
             SettingsView()
                 .tabItem {
                     Label("Settings", systemImage: "gearshape")
                 }
-                .tag(2)
+                .tag(3)
         }
         .tint(Theme.accent)
     }

@@ -9,6 +9,10 @@ packages:
     path: ../Sources/SharedKit
   NetworkKit:
     path: ../Sources/NetworkKit
+  PlaudCore:
+    path: ../Sources/PlaudCore
+  BLEKit:
+    path: ../Sources/BLEKit
 
 targets:
   OpenPlauditMobile:
@@ -20,6 +24,8 @@ targets:
     dependencies:
       - package: SharedKit
       - package: NetworkKit
+      - package: PlaudCore
+      - package: BLEKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.openplaudit.mobile
@@ -30,6 +36,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: OpenPlauditMobile/OpenPlauditMobile.entitlements
         GENERATE_INFOPLIST_FILE: NO
         DEVELOPMENT_TEAM: 4Z5DVBGQ95
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "Connect to your PLAUD recorder to sync recordings."
 
   RecordingWidget:
     type: app-extension
