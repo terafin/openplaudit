@@ -465,7 +465,7 @@ class PlaudClient:
         error = None
         gap_at = None
 
-        # consistently died at 90-93%. Append instead: one write per packet.
+        # Append; rewriting the whole buffer per chunk starved the BLE path.
         progress_fh = None
         if progress_path is not None:
             try:
@@ -474,7 +474,7 @@ class PlaudClient:
                 if start_offset == 0:
                     progress_fh = p.open("wb")
                 elif p.exists() and p.stat().st_size == start_offset:
-                    # is always the WHOLE file from offset 0. Without this the
+                    # `received` holds the whole file from offset 0.
                     received.extend(p.read_bytes())
                     progress_fh = p.open("ab")
                 else:
@@ -558,8 +558,7 @@ class PlaudClient:
                 raise RuntimeError(error)
 
         try:
-            # Drain stale control frames before starting. GET_REC_SESSIONS
-            # frames must not reach the data handler; a leftover SYNC_FILE_TAIL
+            # Drain control frames first; a leftover SYNC_FILE_TAIL reads as EOF.
             for _stale in (CMD_GET_REC_SESSIONS, CMD_SYNC_FILE_TAIL):
                 try:
                     while not self._get_queue(_stale).empty():
@@ -569,7 +568,7 @@ class PlaudClient:
             await self.send(CMD_SYNC_FILE_HEAD,
                             struct.pack("<III", session_id, start_offset, file_size))
             await _wait_complete()
-            # MAX_GAP_RESENDS bounds resends *per gap*, not per transfer. A
+            # MAX_GAP_RESENDS bounds resends per gap, not per transfer.
             resends = 0
             resends_at_offset = 0
             last_resume = -1
@@ -589,7 +588,6 @@ class PlaudClient:
                 if self.verbose or verbose:
                     print(f"\n  [resend] #{resends} (x{resends_at_offset} at this "
                           f"offset) from {resume}")
-                # splice a duplicated block into the middle of the file — it
                 if 0 <= resume < expected_offset:
                     del received[resume:]
                     expected_offset = resume
@@ -600,11 +598,10 @@ class PlaudClient:
                             progress_fh.truncate()
                         except Exception:
                             pass
-                # `error` is deliberately NOT cleared here: if a resend raises a
-                # return immediately, reporting a truncated file as success.
+                # A resend must not clear `error` or reuse a set `done`.
                 done = asyncio.Event()
                 last_progress = time.monotonic()
-                # Accept only a frame at exactly `resume` until it arrives, so
+                # Accept only a frame at exactly `resume` until it arrives.
                 resync_from = resume
                 await self.send(CMD_SYNC_FILE_HEAD,
                                 struct.pack("<III", session_id, resume, file_size))
@@ -638,8 +635,7 @@ class PlaudClient:
                     f"Transfer incomplete: device listed {file_size} bytes but "
                     f"sent {expected_offset}")
         finally:
-            # [sessionId:4]) — ii/u0. Never send cmd 0x16 / [0][1] here:
-            # pattern (ji/j0 R3 → payload [reason][1]) and lights the red LED.
+            # Never send cmd 0x16 / [0][1] here: it lights the red LED.
             try:
                 await self.send(CMD_SYNC_FILE_STOP, struct.pack("<I", session_id))
             except Exception:
