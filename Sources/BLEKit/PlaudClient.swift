@@ -66,6 +66,9 @@ public actor PlaudClient {
 
     // Pre-handshake frames are unencrypted and have the opcode in bytes 0-1,
     // so they cannot share the command-response path.
+    // v20 file assembly (see TransferV20.swift).
+    private var assembler: V20Assembler?
+
     private var preHandshakeFrames: [Data] = []
     private var preHandshakeWaiters: [UInt16: CheckedContinuation<Data?, Never>] = [:]
 
@@ -222,6 +225,13 @@ public actor PlaudClient {
     /// Everything that arrives from the device lands here, so decryption can be
     /// applied to the WHOLE frame before it is parsed — the sealed blob covers
     /// the proto and command bytes too.
+    // MARK: - v20 file assembly
+
+    func beginAssembly(_ a: V20Assembler) { assembler = a }
+    func endAssembly() { assembler = nil }
+    func assemblerState() -> V20Assembler? { assembler }
+    func clearGap() { assembler?.clearGap() }
+
     func handleNotification(_ raw: Data) {
         var frame = raw
         if let crypto = sessionCrypto {
@@ -247,7 +257,14 @@ public actor PlaudClient {
         }
 
         if frame[0] == protoVoice {
-            handleVoiceData(Data(frame.dropFirst()))
+            // During a v20 download the whole frame is handed to the assembler:
+            // it carries session + offset, and its payload is a slice of the
+            // FILE, not a single Opus frame.
+            if assembler != nil {
+                assembler?.consume(frame)
+            } else {
+                handleVoiceData(Data(frame.dropFirst()))
+            }
             return
         }
         guard frame[0] == protoCommand, frame.count >= 3 else { return }

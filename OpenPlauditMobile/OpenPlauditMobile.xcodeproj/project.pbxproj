@@ -15,6 +15,7 @@
 		2891DC5A12872C20C0F3CDA2 /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F777DCC103C907F232091B65 /* TranscriptView.swift */; };
 		3351F2155637B362B0D06D33 /* RecordIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67DA476EE535E79071B3344B /* RecordIntent.swift */; };
 		34DE9F77FCC38025B47CFAA7 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B6F69BF7D1A144F6487A6C /* Theme.swift */; };
+		5A3CD6F3E83194A6EBEB28E8 /* BackgroundSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E1F288BD8BE82883E2CE97F /* BackgroundSync.swift */; };
 		5B67C04D3BD590166570D389 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89B20FFFD539F33BD9C2780A /* App.swift */; };
 		6066C7D7D92988B42B1BDAC2 /* BLEKit in Frameworks */ = {isa = PBXBuildFile; productRef = 3DD42CE409AEE83BFBF428E6 /* BLEKit */; };
 		653AEB7FF49CFF6DE8DC7DB5 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B0143BE9A22334ACC8C7A74 /* SettingsView.swift */; };
@@ -49,6 +50,7 @@
 		45B6F69BF7D1A144F6487A6C /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		67DA476EE535E79071B3344B /* RecordIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordIntent.swift; sourceTree = "<group>"; };
 		69817E5B34148816FF8C1885 /* RecordingModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingModel.swift; sourceTree = "<group>"; };
+		7E1F288BD8BE82883E2CE97F /* BackgroundSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundSync.swift; sourceTree = "<group>"; };
 		89B20FFFD539F33BD9C2780A /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		8E601E0B801754AC0295F3B9 /* RecordingWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingWidget.swift; sourceTree = "<group>"; };
 		9E4010B7E602D7CC70FF9D40 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -112,6 +114,7 @@
 			children = (
 				89B20FFFD539F33BD9C2780A /* App.swift */,
 				BD13E28638E9A1E57AF335DB /* Assets.xcassets */,
+				7E1F288BD8BE82883E2CE97F /* BackgroundSync.swift */,
 				F75D53E422B6A5CF3227324B /* DeviceSyncModel.swift */,
 				F0D73C2541369008F32697EE /* DeviceSyncView.swift */,
 				9E4010B7E602D7CC70FF9D40 /* Info.plist */,
@@ -202,10 +205,10 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					15DC7D77235D87BA3FD87B0E = {
-						DevelopmentTeam = 4Z5DVBGQ95;
+						DevelopmentTeam = TV4YSC6K94;
 					};
 					784DAA7B9BB3CDDCF18AD080 = {
-						DevelopmentTeam = 4Z5DVBGQ95;
+						DevelopmentTeam = TV4YSC6K94;
 					};
 				};
 			};
@@ -252,6 +255,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5B67C04D3BD590166570D389 /* App.swift in Sources */,
+				5A3CD6F3E83194A6EBEB28E8 /* BackgroundSync.swift in Sources */,
 				173AB4DAAF3FFEB944B049DB /* DeviceSyncModel.swift in Sources */,
 				23655B12D6F163B1D8A758FC /* DeviceSyncView.swift in Sources */,
 				E26C15DCFB579CA4B83427D1 /* LiveActivityManager.swift in Sources */,
@@ -353,7 +357,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 4Z5DVBGQ95;
+				DEVELOPMENT_TEAM = TV4YSC6K94;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -361,7 +365,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.9.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.openplaudit.mobile.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.terafin.openplaudit.widget;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -372,7 +376,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 4Z5DVBGQ95;
+				DEVELOPMENT_TEAM = TV4YSC6K94;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -380,7 +384,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.9.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.openplaudit.mobile.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.terafin.openplaudit.widget;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -394,16 +398,15 @@
 				CODE_SIGN_ENTITLEMENTS = OpenPlauditMobile/OpenPlauditMobile.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 4Z5DVBGQ95;
+				DEVELOPMENT_TEAM = TV4YSC6K94;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OpenPlauditMobile/Info.plist;
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Connect to your PLAUD recorder to sync recordings.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 0.9.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.openplaudit.mobile;
+				PRODUCT_BUNDLE_IDENTIFIER = com.terafin.openplaudit;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -417,16 +420,15 @@
 				CODE_SIGN_ENTITLEMENTS = OpenPlauditMobile/OpenPlauditMobile.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 4Z5DVBGQ95;
+				DEVELOPMENT_TEAM = TV4YSC6K94;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OpenPlauditMobile/Info.plist;
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Connect to your PLAUD recorder to sync recordings.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 0.9.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.openplaudit.mobile;
+				PRODUCT_BUNDLE_IDENTIFIER = com.terafin.openplaudit;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";

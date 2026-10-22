@@ -28,15 +28,14 @@ targets:
       - package: BLEKit
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.openplaudit.mobile
+        PRODUCT_BUNDLE_IDENTIFIER: com.terafin.openplaudit
         MARKETING_VERSION: "0.9.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         INFOPLIST_FILE: OpenPlauditMobile/Info.plist
         CODE_SIGN_ENTITLEMENTS: OpenPlauditMobile/OpenPlauditMobile.entitlements
         GENERATE_INFOPLIST_FILE: NO
-        DEVELOPMENT_TEAM: 4Z5DVBGQ95
-        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "Connect to your PLAUD recorder to sync recordings."
+        DEVELOPMENT_TEAM: TV4YSC6K94
 
   RecordingWidget:
     type: app-extension
@@ -47,12 +46,12 @@ targets:
       - target: OpenPlauditMobile
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.openplaudit.mobile.widget
+        PRODUCT_BUNDLE_IDENTIFIER: com.terafin.openplaudit.widget
         MARKETING_VERSION: "0.9.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         GENERATE_INFOPLIST_FILE: YES
-        DEVELOPMENT_TEAM: 4Z5DVBGQ95
+        DEVELOPMENT_TEAM: TV4YSC6K94
 
 schemes:
   OpenPlauditMobile:

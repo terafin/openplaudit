@@ -6,6 +6,11 @@
 import SwiftUI
 import SwiftData
 
+/// Register background sync before launch finishes, per BackgroundTasks rules.
+private let backgroundRegistration: Void = {
+    BackgroundSync.register()
+}()
+
 @main
 struct OpenPlauditMobileApp: App {
     var sharedModelContainer: ModelContainer = {
@@ -22,6 +27,10 @@ struct OpenPlauditMobileApp: App {
         WindowGroup {
             ContentView()
                 .preferredColorScheme(.dark)
+                .onAppear {
+                    _ = backgroundRegistration
+                    BackgroundSync.schedule()
+                }
         }
         .modelContainer(sharedModelContainer)
     }
@@ -29,7 +38,9 @@ struct OpenPlauditMobileApp: App {
 
 /// Root content view with tab navigation.
 struct ContentView: View {
-    @State private var selectedTab = 0
+    /// Persisted so the app reopens where you left it. Defaults to Device,
+    /// which is the tab this app is actually used from.
+    @AppStorage("selectedTab") private var selectedTab: Int = 2
 
     var body: some View {
         TabView(selection: $selectedTab) {

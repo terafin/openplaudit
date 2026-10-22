@@ -196,6 +196,9 @@ public struct DeviceCredentials: Sendable {
     public let snSignature: Data
     public let rsaPublicKeyPEM: String
     public let rsaPrivateKeyPEM: String
+    /// Optional: the device binding token. When present the app does not need a
+    /// separate field, which removes a hand-pasted 32-char hex from the setup.
+    public let deviceToken: String?
 
     public enum ParseError: Error, LocalizedError {
         case missing(String)
@@ -208,7 +211,9 @@ public struct DeviceCredentials: Sendable {
         }
     }
 
-    public init(snSignature: Data, rsaPublicKeyPEM: String, rsaPrivateKeyPEM: String) {
+    public init(snSignature: Data, rsaPublicKeyPEM: String, rsaPrivateKeyPEM: String,
+                deviceToken: String? = nil) {
+        self.deviceToken = deviceToken
         self.snSignature = snSignature
         self.rsaPublicKeyPEM = rsaPublicKeyPEM
         self.rsaPrivateKeyPEM = rsaPrivateKeyPEM
@@ -246,7 +251,10 @@ public struct DeviceCredentials: Sendable {
         return DeviceCredentials(
             snSignature: sig,
             rsaPublicKeyPEM: try pem("user_rsa_public_key", kind: "PUBLIC KEY"),
-            rsaPrivateKeyPEM: try pem("user_rsa_private_key", kind: "PRIVATE KEY")
+            rsaPrivateKeyPEM: try pem("user_rsa_private_key", kind: "PRIVATE KEY"),
+            deviceToken: (try? field("device_token")).map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
         )
     }
 
