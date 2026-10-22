@@ -16,6 +16,8 @@ DEFAULTS = {
     "device": {
         "address": "",
         "token": "",
+        "creds_path": "~/plaud-credentials.md",
+        "port_version": 20,
     },
     "output": {
         "base_dir": DEFAULT_OUTPUT_DIR,
@@ -23,6 +25,11 @@ DEFAULTS = {
     "transcription": {
         "model": "medium",
         "language": "en",
+        "api_key": "",  # OpenAI-compatible key; falls back to env OPENAI_API_KEY
+        "openai_model": "whisper-1",  # model name for the OpenAI-compatible endpoint
+        # Hosted endpoints cap audio duration (vLLM defaults to 600s). Audio
+        # longer than this is split, transcribed piecewise, and stitched.
+        "chunk_seconds": 540,
     },
     "sync": {
         "auto_delete_local_audio": False,
@@ -105,6 +112,10 @@ def get_output_dirs(cfg: dict) -> dict[str, Path]:
         "base": base,
         "audio": base / "audio",
         "transcripts": base / "transcripts",
+        # Markdown copies for Obsidian etc. Override with output.markdown_dir
+        # to write straight into a vault, e.g.
+        #   plaude config set output.markdown_dir "~/Documents/Obsidian Vault/Recordings"
+        "markdown": Path(cfg["output"].get("markdown_dir") or base / "markdown").expanduser(),
         "raw": base / "raw",
     }
 
